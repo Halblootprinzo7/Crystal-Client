@@ -8,6 +8,8 @@ import com.messerocks.crystal.utils.LegitPlace;
 import com.messerocks.crystal.utils.TurnProgress;
 import com.messerocks.crystal.utils.VanillaClick;
 import com.messerocks.crystal.utils.VanillaLimits;
+import meteordevelopment.meteorclient.events.meteor.KeyEvent;
+import meteordevelopment.meteorclient.events.meteor.MouseClickEvent;
 import meteordevelopment.meteorclient.events.render.Render3DEvent;
 import meteordevelopment.meteorclient.events.world.BlockUpdateEvent;
 import meteordevelopment.meteorclient.events.world.TickEvent.Pre;
@@ -16,6 +18,7 @@ import meteordevelopment.meteorclient.settings.Setting;
 import meteordevelopment.meteorclient.settings.SettingGroup;
 import meteordevelopment.meteorclient.settings.KeybindSetting.Builder;
 import meteordevelopment.meteorclient.utils.misc.Keybind;
+import meteordevelopment.meteorclient.utils.misc.input.KeyAction;
 import meteordevelopment.meteorclient.utils.player.FindItemResult;
 import meteordevelopment.meteorclient.utils.player.InvUtils;
 import meteordevelopment.meteorclient.utils.render.color.Color;
@@ -168,6 +171,13 @@ public class SwordPlace extends CrystalModule {
    private int switchedTo = -1;
    private int switchedFrom = -1;
    private class_2338 lastPlaced;
+   // A press seen as a key event. The tick-time poll of the key misses a tap that goes down and up between ticks.
+   private boolean pressLatched;
+   // SwapBack: the borrowed slot is only handed back once the click went out or the press ended. Handing it back on
+   // the switch tick started the quiet-tick countdown early, so a click that had to wait a tick or two lost its
+   // obsidian to the swap-back and never happened.
+   private HotbarSwap borrowed;
+   private int borrowedFrom = -1;
 
    public SwordPlace() {
       super(CrystalAddon.CATEGORY, "sword-place", "Place obsidian at your crosshair without dropping your sword.");
@@ -175,6 +185,7 @@ public class SwordPlace extends CrystalModule {
 
    public void onDeactivate() {
       this.wasPressed = false;
+      this.pressLatched = false;
       this.lockout = 0;
       this.endPress();
       this.previewPos = null;
@@ -189,6 +200,7 @@ public class SwordPlace extends CrystalModule {
       if (this.mc.field_1724 != null && this.mc.field_1687 != null) {
          if (this.mc.field_1755 != null) {
             this.wasPressed = ((Keybind)this.bind.get()).isPressed();
+            this.pressLatched = false;
             this.endPress();
          } else {
             if (this.lockout > 0) {
@@ -196,8 +208,13 @@ public class SwordPlace extends CrystalModule {
             }
 
             this.press.countDown();
+            if (!this.press.live()) {
+               this.giveBack();
+            }
+
             boolean pressed = ((Keybind)this.bind.get()).isPressed();
-            boolean firstDown = pressed && !this.wasPressed;
+            boolean firstDown = pressed && !this.wasPressed || this.pressLatched;
+            this.pressLatched = false;
             this.wasPressed = pressed;
             if (this.bindIsUseKey()) {
                this.endPress();
@@ -214,7 +231,6 @@ public class SwordPlace extends CrystalModule {
                   this.saidWaiting = false;
                }
 
-               this.press.held(pressed);
                if (!this.press.hasSwitched()) {
                   this.pressSlot = -1;
                }
@@ -255,17 +271,21 @@ public class SwordPlace extends CrystalModule {
                                  } else {
                                     class_3965 click = LegitPlace.confirmPlacement(target, class_1802.field_8281, sentYaw, sentPitch, this.reach());
                                     if (click != null) {
-                                       if (this.place(click)) {
+                                       class_2338 previous = this.lastPlaced;
+                                       this.lastPlaced = target;
+                                       if (!this.place(click)) {
+                                          this.lastPlaced = previous;
+                                          if (this.press.live() && this.worthTheLook(crosshair)) {
+                                             TurnProgress.requestCamera();
+                                          }
+                                       } else {
                                           this.endPress();
                                           this.lockout = Math.max(2, Stealth.pace((Integer)this.cooldown.get()));
-                                          this.lastPlaced = target;
                                           if ((Boolean)this.debug.get()) {
                                              this.info(
                                                 "Sent click -> %d %d %d", new Object[]{target.method_10263(), target.method_10264(), target.method_10260()}
                                              );
                                           }
-                                       } else if (this.press.live() && this.worthTheLook(crosshair)) {
-                                          TurnProgress.requestCamera();
                                        }
                                     }
                                  }
@@ -283,6 +303,29 @@ public class SwordPlace extends CrystalModule {
    private void endPress() {
       this.press.end();
       this.pressSlot = -1;
+      this.giveBack();
+   }
+
+   private void giveBack() {
+      if (this.borrowed != null) {
+         this.back(this.borrowed, this.borrowedFrom);
+         this.borrowed = null;
+         this.borrowedFrom = -1;
+      }
+   }
+
+   @EventHandler
+   private void onKey(KeyEvent event) {
+      if (event.action == KeyAction.Press && this.mc.field_1755 == null && ((Keybind)this.bind.get()).matches(event.input)) {
+         this.pressLatched = true;
+      }
+   }
+
+   @EventHandler
+   private void onMouse(MouseClickEvent event) {
+      if (event.action == KeyAction.Press && this.mc.field_1755 == null && ((Keybind)this.bind.get()).matches(event.input)) {
+         this.pressLatched = true;
+      }
    }
 
    private boolean onCamera(double yaw, double pitch) {
@@ -331,14 +374,24 @@ public class SwordPlace extends CrystalModule {
                if (!silent.ready()) {
                   return false;
                }
-            } else if (!HotbarSwap.select(obsidian.slot())) {
-               return false;
+            } else {
+               if (!HotbarSwap.select(obsidian.slot())) {
+                  return false;
+               }
+
+               // Stay: remember the switch, so only-with-weapon still recognises obsidian as Sword Place's own
+               // and the next press works without reselecting the sword by hand.
+               this.switchedTo = obsidian.slot();
+               if (this.switchedFrom == -1) {
+                  this.switchedFrom = selected;
+               }
             }
 
             hand = class_1268.field_5808;
             if (ClickGate.slotChangedThisTick()) {
-               if (silent != null) {
-                  this.back(silent, selected);
+               if (silent != null && silent.swapped() && this.borrowed == null) {
+                  this.borrowed = silent;
+                  this.borrowedFrom = selected;
                }
 
                this.pressSlot = obsidian.slot();
@@ -347,20 +400,21 @@ public class SwordPlace extends CrystalModule {
             }
          }
 
+         boolean sent = false;
          if (this.mc.field_1724.method_5998(hand).method_31574(class_1802.field_8281) && Stealth.claimUse()) {
-            VanillaClick.use(hit, (Boolean)this.swing.get());
-            if (silent != null) {
-               this.back(silent, selected);
-            }
-
-            return true;
-         } else {
-            if (silent != null) {
-               this.back(silent, selected);
-            }
-
-            return false;
+            // use() returns null when nothing went out (breaking a block, riding); only a sent click uses the press up.
+            sent = VanillaClick.use(hit, (Boolean)this.swing.get()) != null || !ClickGate.canUse();
          }
+
+         if (silent != null && this.borrowed == null) {
+            this.back(silent, selected);
+         }
+
+         if (sent) {
+            this.giveBack();
+         }
+
+         return sent;
       }
    }
 
@@ -461,12 +515,6 @@ public class SwordPlace extends CrystalModule {
 
       void start() {
          this.left = Math.max(this.left, 3);
-      }
-
-      void held(boolean down) {
-         if (!down && !this.switched) {
-            this.end();
-         }
       }
 
       void switched() {

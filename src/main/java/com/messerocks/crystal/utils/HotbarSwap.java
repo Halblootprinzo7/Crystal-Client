@@ -170,7 +170,10 @@ public final class HotbarSwap {
             pendingFrom = -1;
             pendingTo = -1;
          } else if (ClickGate.canSwitchSlot() && mc.field_1755 == null) {
-            if (++quietTicks >= quietNeeded) {
+            // Hand the slot back at once when the player is about to click themselves. Vanilla's use tries the main
+            // hand first, so a right-click meant for the off-hand crystals would otherwise place the borrowed item
+            // (Sword Place's obsidian) a second time; ClickGate holds that click one tick and it goes out after.
+            if (++quietTicks >= quietNeeded || TurnProgress.ownClickPending()) {
                InvUtils.swap(pendingFrom, false);
                InvUtils.previousSlot = pendingOthersPrevious;
                pendingFrom = -1;
