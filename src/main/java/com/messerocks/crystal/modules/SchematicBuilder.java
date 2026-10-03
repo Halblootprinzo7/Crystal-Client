@@ -158,11 +158,11 @@ public class SchematicBuilder extends CrystalModule {
          ((meteordevelopment.meteorclient.settings.DoubleSetting.Builder)((meteordevelopment.meteorclient.settings.DoubleSetting.Builder)new meteordevelopment.meteorclient.settings.DoubleSetting.Builder()
                   .name("blocks-per-second"))
                .description(
-                  "Placements per second, at most one a tick. Each one is priced a little differently by Stealth's timing-jitter, so they never come on an exact beat. Ten is a fast builder's hand; it cannot go higher."
+                  "Placements per second, at most one a tick. Each one is priced a little differently by Stealth's timing-jitter, so they never come on an exact beat. Holding right click in vanilla gives 5; 10 to 15 is a fast builder clicking - the top of what a hand does. Stealth's max-actions-per-second caps it as well."
                ))
             .defaultValue(8.0)
-            .range(0.5, 10.0)
-            .sliderRange(0.5, 10.0)
+            .range(0.5, 15.0)
+            .sliderRange(0.5, 15.0)
             .build()
       );
    private final Setting<Boolean> bottomUp = this.sgBuild
@@ -374,6 +374,11 @@ public class SchematicBuilder extends CrystalModule {
    private Schematic loaded;
    private Schematic building;
    private class_2338 anchor;
+   // Crosshair mode: the schematic by world position, so the block under your crosshair is looked up the moment you
+   // look at it instead of waiting for the next rescan to put it on the list.
+   private Map<class_2338, Schematic.Entry> byWorld;
+   private Schematic byWorldFor;
+   private class_2338 byWorldAt;
    private LitematicaPlacement.Placement anchoredPlacement;
    private int followTimer;
    private final List<Schematic.Entry> pending = new ArrayList<>();
@@ -1342,11 +1347,14 @@ public class SchematicBuilder extends CrystalModule {
          class_2338 clicked = look.method_17777();
          class_2338 beyond = clicked.method_10093(look.method_17780());
          class_243 eyes = this.mc.field_1724.method_33571();
+         boolean crosshair = this.mode.get() == SchematicBuilder.Mode.Crosshair;
 
-         for (Schematic.Entry entry : this.pending) {
+         for (Schematic.Entry entry : crosshair ? this.targetsAt(clicked, beyond) : this.pending) {
             class_2338 world = this.anchor.method_10081(entry.offset());
             if (world.equals(clicked) || world.equals(beyond)) {
-               boolean stacking = this.stackOnto.contains(world);
+               boolean stacking = crosshair
+                  ? Schematic.needsMore(this.mc.field_1687.method_8320(world), entry.state())
+                  : this.stackOnto.contains(world);
                if (this.workable(world, entry.state(), stacking, eyes)) {
                   FindItemResult item = this.findPlaceable(entry.state());
                   if (!item.found()) {
@@ -1375,6 +1383,32 @@ public class SchematicBuilder extends CrystalModule {
 
          return SchematicBuilder.ClickStep.NONE;
       }
+   }
+
+   private List<Schematic.Entry> targetsAt(class_2338 clicked, class_2338 beyond) {
+      if (this.byWorld == null || this.byWorldFor != this.building || !this.anchor.equals(this.byWorldAt)) {
+         this.byWorld = new HashMap<>();
+         this.byWorldFor = this.building;
+         this.byWorldAt = this.anchor;
+
+         for (Schematic.Entry entry : this.building.entries()) {
+            if (!Schematic.isSecondHalf(entry.state())) {
+               this.byWorld.put(this.anchor.method_10081(entry.offset()), entry);
+            }
+         }
+      }
+
+      List<Schematic.Entry> found = new ArrayList<>(2);
+      // The block beyond the face first: that is where a normal click puts the block. The clicked block itself only
+      // counts for blocks that are clicked onto (slabs, candles, snow layers stacking up).
+      for (class_2338 pos : new class_2338[]{beyond, clicked}) {
+         Schematic.Entry entry = this.byWorld.get(pos);
+         if (entry != null) {
+            found.add(entry);
+         }
+      }
+
+      return found;
    }
 
    private boolean workable(class_2338 world, class_2680 target, boolean stacking, class_243 eyes) {
@@ -1580,10 +1614,10 @@ public class SchematicBuilder extends CrystalModule {
             }
          }
 
-         if (this.mc.field_1724.method_31548().method_67532() != slot) {
-            HotbarSwap.select(slot);
+         if (this.mc.field_1724.method_31548().method_67532() != slot && !HotbarSwap.select(slot)) {
             return SchematicBuilder.Outcome.WAIT;
          } else if (ClickGate.slotChangedThisTick()) {
+            // Waits a tick after the switch - unless Stealth's same-tick-switch lets the click follow it at once.
             return SchematicBuilder.Outcome.WAIT;
          } else {
             return offhand && !VanillaClick.reaches(hit, class_1268.field_5810) ? SchematicBuilder.Outcome.DROP : null;
