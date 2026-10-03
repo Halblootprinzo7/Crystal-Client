@@ -105,6 +105,14 @@ public final class TurnProgress {
       }
    }
 
+   // The look already going out with this tick's movement packet, or null when none is queued yet. A further click in
+   // the same tick can only use this look.
+   public double[] lookThisTick() {
+      return mc.field_1724 != null && mc.field_1724.field_6012 == this.lastSentTick && this.queued != null && !this.movementSent()
+         ? new double[]{this.queued.yaw, this.queued.pitch}
+         : null;
+   }
+
    public boolean lastCallBlocked() {
       return this.blocked;
    }

@@ -227,11 +227,11 @@ public class AutoCrystal extends CrystalModule {
       .add(
          ((Builder)((Builder)((Builder)new Builder().name("place-speed"))
                   .description(
-                     "Placements per second, 1 to 20. Never more than one right click a tick - one finger on one button - and Stealth's max-actions-per-second caps all clicks together."
+                     "Placements per second, 1 to 50. Up to 20 that is one right click a tick at most; above 20 a click may follow another in the same tick - a hit and the new crystal on that obsidian, a slot switch and the placement. Stealth's max-actions-per-second caps all clicks together, raise it along with this."
                   ))
                .defaultValue(8.0)
-               .range(1.0, 20.0)
-               .sliderRange(1.0, 20.0)
+               .range(1.0, 50.0)
+               .sliderRange(1.0, 50.0)
                .visible(this.place::get))
             .build()
       );
@@ -245,6 +245,17 @@ public class AutoCrystal extends CrystalModule {
                .min(0.0)
                .sliderMax(6.0)
                .visible(this.place::get))
+            .build()
+      );
+   private final Setting<Boolean> crosshairPriority = this.sgPlace
+      .add(
+         new meteordevelopment.meteorclient.settings.BoolSetting.Builder()
+            .name("crosshair-priority")
+            .description(
+               "Obsidian or bedrock under your crosshair is crystalled first whenever a crystal fits there, only needing face-place-min-damage on the target instead of min-damage, and without waiting out the reaction time: you are looking at it because that is where you want the crystal. Self-damage limits still apply. Off, only obsidian you placed yourself in the last two seconds is treated that way."
+            )
+            .defaultValue(true)
+            .visible(this.place::get)
             .build()
       );
    private final Setting<Boolean> farPlace = this.sgPlace
@@ -308,10 +319,10 @@ public class AutoCrystal extends CrystalModule {
    private final Setting<Double> breakSpeed = this.sgBreak
       .add(
          ((Builder)((Builder)((Builder)new Builder().name("break-speed"))
-                  .description("Hits per second, 1 to 20. Never more than one hit a tick, and Stealth's max-actions-per-second caps all clicks together."))
+                  .description("Hits per second, 1 to 50. Up to 20 that is one hit a tick at most; above 20 a hit may go out in the same tick as a right click or a slot switch. Stealth's max-actions-per-second caps all clicks together."))
                .defaultValue(8.0)
-               .range(1.0, 20.0)
-               .sliderRange(1.0, 20.0)
+               .range(1.0, 50.0)
+               .sliderRange(1.0, 50.0)
                .visible(this.doBreak::get))
             .build()
       );
@@ -371,11 +382,11 @@ public class AutoCrystal extends CrystalModule {
          new meteordevelopment.meteorclient.settings.IntSetting.Builder()
             .name("replace-delay")
             .description(
-               "Ticks after a crystal is hit before the next one goes on that obsidian. 1 is the fastest - the hit and the new crystal arrive at the server in that order, so the spot is free by then; 2 gives the server's answer a tick to come back first."
+               "Ticks after a crystal is hit before the next one goes on that obsidian. The hit reaches the server first, so the spot is free by the time the new crystal arrives - the old one is aimed through even while it is still drawn here. 0 places in the very same tick as the hit, along the same look, whenever the crystals are already in hand (or with place-speed above 20)."
             )
             .defaultValue(2)
-            .range(1, 5)
-            .sliderRange(1, 5)
+            .range(0, 5)
+            .sliderRange(0, 5)
             .visible(this.doBreak::get)
             .build()
       );
@@ -561,6 +572,9 @@ public class AutoCrystal extends CrystalModule {
    private final Map<class_2338, Integer> hitBases = new HashMap<>();
    private final Map<class_2338, Integer> ownBases = new HashMap<>();
    private static final int OWN_BASE_TICKS = 40;
+   private class_2338 replaceBase;
+   private AutoCrystal.Aim replaceLook;
+   private int replaceTick = Integer.MIN_VALUE;
    private final Map<Integer, AutoCrystal.SeenHealth> seenHealth = new HashMap<>();
    private int clientTicks;
    private final Predicate<class_1297> goneWhenPlanned = entity -> entity instanceof class_1511
@@ -636,7 +650,11 @@ public class AutoCrystal extends CrystalModule {
    private void onTick(Pre event) {
       if (this.isActive()) {
          long started = System.nanoTime();
-         this.tick();
+         // Crystals already hit are gone on the server before our next click arrives; aiming does not stop at them.
+         LegitPlace.passingThrough(this.goneWhenPlanned, () -> {
+            this.tick();
+            return null;
+         });
          long spent = System.nanoTime() - started;
          this.tickNanos += spent;
          this.worstTickNanos = Math.max(this.worstTickNanos, spent);
@@ -682,8 +700,9 @@ public class AutoCrystal extends CrystalModule {
          this.trackOwnWork(brokenByUs);
          this.placed.expire(this.clientTicks, window, base -> CrystalUtils.isObstructed(base.method_10084(), this.goneWhenSent));
          if (!Stealth.paused() && !this.mc.field_1724.method_29504()) {
-            this.placeBudget.update((Double)this.placeSpeed.get(), 1);
-            this.breakBudget.update((Double)this.breakSpeed.get(), 1);
+            this.placeBudget.update((Double)this.placeSpeed.get(), ClickGate.perTick((Double)this.placeSpeed.get()));
+            this.breakBudget.update((Double)this.breakSpeed.get(), ClickGate.perTick((Double)this.breakSpeed.get()));
+            ClickGate.allowBurst(ClickGate.perTick(Math.max((Double)this.placeSpeed.get(), (Double)this.breakSpeed.get())));
             this.renderPos = null;
             this.renderDamage = 0.0;
             this.usedPositions.clear();
@@ -1413,7 +1432,10 @@ public class AutoCrystal extends CrystalModule {
    }
 
    private AutoCrystal.Aim crystalAim(class_1511 crystal) {
-      return this.hitAimCache.computeIfAbsent(crystal.method_5628(), id -> Optional.ofNullable(this.hitAim(crystal.method_5829()))).orElse(null);
+      return this.hitAimCache.computeIfAbsent(crystal.method_5628(), id -> {
+         AutoCrystal.Aim shared = this.replaceAim(crystal);
+         return Optional.ofNullable(shared != null ? shared : this.hitAim(crystal.method_5829()));
+      }).orElse(null);
    }
 
    private void recordOwnHit(int id, float raw) {
@@ -1770,6 +1792,11 @@ public class AutoCrystal extends CrystalModule {
          class_2338 looking = this.lookingAt();
          return looking != null && !this.blockedByPending(looking) ? this.acceptable(looking, legacy, required, selfHealth) : null;
       } else {
+         AutoCrystal.Spot again = this.sameTickReplace(legacy, required, selfHealth);
+         if (again != null) {
+            return again;
+         }
+
          AutoCrystal.Spot yours = this.ownBaseInCrosshair(legacy, required, selfHealth);
          if (yours != null) {
             return yours;
@@ -1827,7 +1854,8 @@ public class AutoCrystal extends CrystalModule {
    private AutoCrystal.Spot ownBaseInCrosshair(boolean legacy, double required, double selfHealth) {
       class_2338 looking = this.lookingAt();
       Integer placedAt = looking == null ? null : this.ownBases.get(looking);
-      if (placedAt == null || this.clientTicks - placedAt > OWN_BASE_TICKS || this.blockedByPending(looking)) {
+      boolean own = placedAt != null && this.clientTicks - placedAt <= OWN_BASE_TICKS;
+      if (looking == null || !own && !((Boolean)this.crosshairPriority.get() && CrystalUtils.isBase(looking)) || this.blockedByPending(looking)) {
          return null;
       } else if (new class_238(looking).method_49271(this.mc.field_1724.method_33571()) >= this.placeReach() * this.placeReach()
          || !VanillaLimits.canReachBlock(looking)
@@ -1852,6 +1880,36 @@ public class AutoCrystal extends CrystalModule {
 
                return new AutoCrystal.Spot(looking, aim);
             }
+         }
+      }
+   }
+
+   // replace-delay 0: the crystal just hit this tick is replaced at once, along the look the hit went out with - the
+   // only look this tick allows - which reachable crystal aims are picked to share (see replaceAim).
+   private AutoCrystal.Spot sameTickReplace(boolean legacy, double required, double selfHealth) {
+      if ((Integer)this.replaceDelay.get() != 0 || this.replaceTick != this.clientTicks || this.replaceBase == null || this.replaceLook == null) {
+         return null;
+      } else {
+         class_2338 base = this.replaceBase;
+         AutoCrystal.Aim aim = this.replaceLook;
+         if (Double.isNaN(this.placementScore(base, legacy, required, selfHealth, Double.NEGATIVE_INFINITY))) {
+            return null;
+         } else {
+            return LegitPlace.confirmCrystal(base, aim.yaw(), aim.pitch(), this.placeReach()) == null ? null : new AutoCrystal.Spot(base, aim);
+         }
+      }
+   }
+
+   private AutoCrystal.Aim replaceAim(class_1511 crystal) {
+      if ((Integer)this.replaceDelay.get() != 0 || !(Boolean)this.place.get() || !this.shouldRotate()) {
+         return null;
+      } else {
+         class_2338 base = crystal.method_24515().method_10074();
+         if (!CrystalUtils.isBase(base)) {
+            return null;
+         } else {
+            AutoCrystal.Aim aim = LegitPlace.passingThrough(entity -> entity == crystal, () -> this.placeAim(base));
+            return aim != null && LegitPlace.confirmEntity(crystal.method_5829(), aim.yaw(), aim.pitch(), this.breakReach()) != null ? aim : null;
          }
       }
    }
@@ -2024,6 +2082,9 @@ public class AutoCrystal extends CrystalModule {
                         KnockbackPredictor.afterAttack();
                         this.attacked.sent(crystal.method_5628(), this.clientTicks);
                         this.hitBases.put(crystal.method_24515().method_10074(), this.clientTicks + ownStep());
+                        this.replaceBase = crystal.method_24515().method_10074();
+                        this.replaceLook = aim;
+                        this.replaceTick = this.clientTicks;
                         class_243 at = crystal.method_73189();
 
                         for (class_1657 player : this.candidates) {
@@ -2195,8 +2256,12 @@ public class AutoCrystal extends CrystalModule {
                                     silent.back();
                                  }
                               } else {
+                                 // The client refuses a crystal where the one just hit still stands (a same-tick
+                                 // replace), but the click still goes out and the server, having taken the hit first,
+                                 // places it. What counts is whether a click left.
+                                 int usesBefore = ClickGate.usesThisTick();
                                  class_1268 acted = VanillaClick.use(hitResult, (Boolean)this.swing.get());
-                                 if (acted != null || !ClickGate.canUse()) {
+                                 if (acted != null || ClickGate.usesThisTick() > usesBefore) {
                                     this.placed.sent(base, this.clientTicks);
                                  }
 

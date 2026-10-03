@@ -242,6 +242,16 @@ public final class AnchorActions {
    public static class_3965 hitResultFor(class_2338 pos, boolean rotate) {
       double reach = VanillaLimits.blockRange();
       if (rotate) {
+         // Within a burst the anchor was usually just placed along this tick's look, which runs through it: charging
+         // and detonating along the same look lets them go out in the same tick instead of waiting for a new turn.
+         double[] look = turn.lookThisTick();
+         if (look != null) {
+            class_3965 same = LegitPlace.along(look[0], look[1], reach);
+            if (same != null && same.method_17777().equals(pos)) {
+               return same;
+            }
+         }
+
          LegitPlace.Result legit = LegitPlace.forExistingBlock(pos, reach);
          return legit == null ? null : legit.hit();
       } else {
