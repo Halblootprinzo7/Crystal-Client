@@ -2,6 +2,8 @@ package com.messerocks.crystal.modules;
 
 import com.messerocks.crystal.CrystalAddon;
 import com.messerocks.crystal.CrystalModule;
+import com.messerocks.crystal.utils.LegitPlace;
+import com.messerocks.crystal.utils.TurnProgress;
 import com.messerocks.crystal.utils.VanillaLimits;
 import meteordevelopment.meteorclient.events.render.Render3DEvent;
 import meteordevelopment.meteorclient.events.world.BlockUpdateEvent;
@@ -13,6 +15,7 @@ import meteordevelopment.meteorclient.settings.KeybindSetting.Builder;
 import meteordevelopment.meteorclient.utils.misc.Keybind;
 import meteordevelopment.meteorclient.utils.player.FindItemResult;
 import meteordevelopment.meteorclient.utils.player.InvUtils;
+import meteordevelopment.meteorclient.utils.player.Rotations;
 import meteordevelopment.meteorclient.utils.render.color.Color;
 import meteordevelopment.meteorclient.utils.render.color.SettingColor;
 import meteordevelopment.meteorclient.utils.world.BlockUtils;
@@ -27,6 +30,7 @@ import net.minecraft.class_2338;
 import net.minecraft.class_238;
 import net.minecraft.class_243;
 import net.minecraft.class_3489;
+import net.minecraft.class_3532;
 import net.minecraft.class_3959;
 import net.minecraft.class_3965;
 import net.minecraft.class_239.class_240;
@@ -39,7 +43,7 @@ public class SwordPlace extends CrystalModule {
    private final Setting<Keybind> bind = this.sgGeneral
       .add(
          ((Builder)((Builder)((Builder)new Builder().name("place-bind"))
-                  .description("Hold this to place obsidian at your crosshair. Set it to a mouse button for the classic feel."))
+                  .description("Press this to place one obsidian at your crosshair. Set it to a mouse button for the classic feel."))
                .defaultValue(Keybind.none()))
             .build()
       );
@@ -61,14 +65,6 @@ public class SwordPlace extends CrystalModule {
                .defaultValue(SwordPlace.SwitchMode.SwapBack))
             .build()
       );
-   private final Setting<Boolean> swapBack = this.sgGeneral
-      .add(
-         ((meteordevelopment.meteorclient.settings.BoolSetting.Builder)((meteordevelopment.meteorclient.settings.BoolSetting.Builder)((meteordevelopment.meteorclient.settings.BoolSetting.Builder)new meteordevelopment.meteorclient.settings.BoolSetting.Builder()
-                     .name("swap-back"))
-                  .description("Return to the sword right after placing. Off leaves obsidian selected."))
-               .defaultValue(true))
-            .build()
-      );
    private final Setting<Double> range = this.sgGeneral
       .add(
          ((meteordevelopment.meteorclient.settings.DoubleSetting.Builder)((meteordevelopment.meteorclient.settings.DoubleSetting.Builder)new meteordevelopment.meteorclient.settings.DoubleSetting.Builder()
@@ -84,7 +80,7 @@ public class SwordPlace extends CrystalModule {
          ((meteordevelopment.meteorclient.settings.IntSetting.Builder)((meteordevelopment.meteorclient.settings.IntSetting.Builder)((meteordevelopment.meteorclient.settings.IntSetting.Builder)new meteordevelopment.meteorclient.settings.IntSetting.Builder()
                      .name("cooldown"))
                   .description(
-                     "Ticks after a placement in which no second one can go out. Vanilla uses 4 between block placements; this also swallows a key that bounces and would otherwise read as two presses."
+                     "Ticks after a placement in which no second one can go out. Vanilla uses 4 between block placements. A press inside the cooldown is not lost, it goes out as soon as the cooldown ends."
                   ))
                .defaultValue(4))
             .min(0)
@@ -144,8 +140,15 @@ public class SwordPlace extends CrystalModule {
                .visible(this.render::get))
             .build()
       );
+   // A press stays valid this long while it waits for the cooldown or for the head to come back to the crosshair,
+   // as long as the crosshair stays on something placeable.
+   private static final int PRESS_VALID_TICKS = 15;
+   private static final Object TURN_OWNER = new Object();
+   private static final int TURN_PRIORITY = 100;
+   private final TurnProgress turn = TurnProgress.SHARED;
    private boolean wasPressed;
    private int lockout;
+   private int pending;
    private class_2338 previewPos;
    private class_2338 lastPlaced;
 
@@ -156,7 +159,9 @@ public class SwordPlace extends CrystalModule {
    public void onDeactivate() {
       this.wasPressed = false;
       this.lockout = 0;
+      this.pending = 0;
       this.previewPos = null;
+      this.turn.reset(TURN_OWNER);
    }
 
    @EventHandler
@@ -168,68 +173,125 @@ public class SwordPlace extends CrystalModule {
          }
 
          boolean pressed = ((Keybind)this.bind.get()).isPressed();
-         boolean firstDown = pressed && !this.wasPressed && this.lockout == 0;
+         if (pressed && !this.wasPressed) {
+            this.pending = PRESS_VALID_TICKS;
+         }
+
          this.wasPressed = pressed;
-         if (!(Boolean)this.onlyWithWeapon.get() || this.isWeapon(this.mc.field_1724.method_6047())) {
-            class_3965 look = this.trace();
-            if (look != null) {
-               class_1750 context = new class_1750(this.mc.field_1724, class_1268.field_5808, new class_1799(class_1802.field_8281), look);
-               if (context.method_7716()) {
-                  class_2338 target = context.method_8037();
-                  if (BlockUtils.canPlaceBlock(target, true, class_2246.field_10540)) {
-                     this.previewPos = target;
-                     if (firstDown && this.place(look)) {
-                        this.lockout = (Integer)this.cooldown.get();
-                        this.lastPlaced = target;
-                        if ((Boolean)this.debug.get()) {
-                           this.info("Sent click -> %d %d %d", new Object[]{target.method_10263(), target.method_10264(), target.method_10260()});
-                           if (this.mc.field_1690.field_1904.method_1434()) {
-                              this.warning(
-                                 "Your bind is also Minecraft's \"Use Item\" key - vanilla places a second block. Unbind one of the two.", new Object[0]
-                              );
-                           }
-                        }
-                     }
+         class_2338 target = this.weaponInHand() ? this.placementTarget(this.trace()) : null;
+         if (target == null) {
+            // Nothing placeable under the crosshair any more: drop the press rather than firing it later
+            // somewhere you have since looked at.
+            this.pending = 0;
+         } else {
+            this.previewPos = target;
+            if (this.pending > 0 && this.lockout == 0 && this.place(target)) {
+               this.pending = 0;
+               this.lockout = (Integer)this.cooldown.get();
+               this.lastPlaced = target;
+               if ((Boolean)this.debug.get()) {
+                  this.info("Sent click -> %d %d %d", new Object[]{target.method_10263(), target.method_10264(), target.method_10260()});
+                  if (this.mc.field_1690.field_1904.method_1434()) {
+                     this.warning("Your bind is also Minecraft's \"Use Item\" key - vanilla places a second block. Unbind one of the two.", new Object[0]);
                   }
                }
+            } else {
+               this.expirePress();
             }
          }
       }
    }
 
-   private boolean place(class_3965 hit) {
-      FindItemResult obsidian = InvUtils.findInHotbar(new class_1792[]{class_1802.field_8281});
-      if (!obsidian.found()) {
-         return false;
+   private void expirePress() {
+      if (this.pending > 0) {
+         this.pending--;
+      }
+   }
+
+   private boolean weaponInHand() {
+      return !(Boolean)this.onlyWithWeapon.get() || this.isWeapon(this.mc.field_1724.method_6047());
+   }
+
+   // Where obsidian would land for this crosshair hit, or null. Blocks that react to a click are left alone:
+   // the click would open a chest or, worse, set off a charged anchor in front of you instead of placing.
+   private class_2338 placementTarget(class_3965 look) {
+      if (look == null || LegitPlace.isInteractive(this.mc.field_1687.method_8320(look.method_17777()))) {
+         return null;
       } else {
-         class_1268 hand = obsidian.getHand();
-         boolean swapped = false;
-         if (hand == null) {
-            swapped = this.selectSlot(obsidian.slot());
-            hand = class_1268.field_5808;
+         class_1750 context = new class_1750(this.mc.field_1724, class_1268.field_5808, new class_1799(class_1802.field_8281), look);
+         if (!context.method_7716()) {
+            return null;
+         } else {
+            class_2338 target = context.method_8037();
+            return BlockUtils.canPlaceBlock(target, true, class_2246.field_10540) ? target : null;
          }
+      }
+   }
 
-         if (this.mc.field_1724.method_5998(hand).method_31574(class_1802.field_8281)) {
-            BlockUtils.interact(hit, hand, (Boolean)this.swing.get());
+   private boolean place(class_2338 target) {
+      if (!InvUtils.findInHotbar(new class_1792[]{class_1802.field_8281}).found()) {
+         this.pending = 0;
+         return false;
+      } else if (Stealth.legitPlace() && this.headElsewhere()) {
+         // A rotation module still holds the head somewhere else on the server. Clicking now would not line up
+         // with what the server thinks you look at, so turn back to the crosshair first and click from there.
+         double yaw = this.mc.field_1724.method_36454();
+         double pitch = this.mc.field_1724.method_36455();
+         if (!this.turn.wouldReach(TURN_OWNER, yaw, pitch, TURN_PRIORITY)) {
+            this.turn.turnTo(TURN_OWNER, yaw, pitch, TURN_PRIORITY, null);
+            return false;
+         } else {
+            return !Stealth.claimAction() ? false : this.turn.turnTo(TURN_OWNER, yaw, pitch, TURN_PRIORITY, () -> this.click(target));
          }
+      } else {
+         return !Stealth.claimAction() ? false : this.click(target);
+      }
+   }
 
-         if (swapped && (Boolean)this.swapBack.get()) {
-            InvUtils.swapBack();
+   private boolean headElsewhere() {
+      return Rotations.rotating
+         && (
+            Math.abs(class_3532.method_15338(Rotations.serverYaw - this.mc.field_1724.method_36454())) > 0.5
+               || Math.abs(Rotations.serverPitch - this.mc.field_1724.method_36455()) > 0.5
+         );
+   }
+
+   private boolean click(class_2338 target) {
+      class_3965 hit = this.trace();
+      if (hit != null && target.equals(this.placementTarget(hit))) {
+         FindItemResult obsidian = InvUtils.findInHotbar(new class_1792[]{class_1802.field_8281});
+         if (!obsidian.found()) {
+            return false;
+         } else {
+            class_1268 hand = obsidian.getHand();
+            boolean swapped = false;
+            if (hand == null) {
+               swapped = this.selectSlot(obsidian.slot());
+               hand = class_1268.field_5808;
+            }
+
+            if (this.mc.field_1724.method_5998(hand).method_31574(class_1802.field_8281)) {
+               BlockUtils.interact(hit, hand, (Boolean)this.swing.get());
+            }
+
+            if (swapped) {
+               InvUtils.swapBack();
+            }
+
+            return true;
          }
-
-         return true;
+      } else {
+         return false;
       }
    }
 
    private boolean selectSlot(int slot) {
       if (slot == this.mc.field_1724.method_31548().method_67532()) {
          return false;
-      } else if (this.switchMode.get() == SwordPlace.SwitchMode.SwapBack) {
-         InvUtils.swap(slot, true);
-         return true;
       } else {
-         InvUtils.swap(slot, false);
-         return false;
+         boolean swapBack = this.switchMode.get() == SwordPlace.SwitchMode.SwapBack;
+         InvUtils.swap(slot, swapBack);
+         return swapBack;
       }
    }
 

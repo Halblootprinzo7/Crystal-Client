@@ -393,6 +393,8 @@ public class AnchorMacro extends CrystalModule {
                .visible(this.render::get))
             .build()
       );
+   // Above the auras (50): a key press takes the shared head rotation over instead of waiting for Auto Crystal to let go.
+   private static final int MACRO_ROTATION_PRIORITY = 100;
    private final ActionBudget budget = new ActionBudget();
    private final ActionBudget speedLimit = new ActionBudget();
    private final ActionBudget placeLimit = new ActionBudget();
@@ -718,7 +720,7 @@ public class AnchorMacro extends CrystalModule {
                      return;
                   }
 
-                  if (!AnchorActions.detonate(spot, charges, this.options(this.explodeLimit))) {
+                  if (!AnchorActions.detonate(spot, charges, this.options(this.explodeLimit), this.returnSlot)) {
                      return;
                   }
 
@@ -768,7 +770,9 @@ public class AnchorMacro extends CrystalModule {
             return extra != null && !extra.tryConsume(cost) ? false : this.speedLimit.tryConsume(cost);
          }
       };
-      return new AnchorActions.Options(mustRotate, (Boolean)this.swing.get(), this.switchMode.get() == AnchorMacro.SwitchMode.Hotbar, 50, gate);
+      return new AnchorActions.Options(
+         mustRotate, (Boolean)this.swing.get(), this.switchMode.get() == AnchorMacro.SwitchMode.Hotbar, MACRO_ROTATION_PRIORITY, gate
+      );
    }
 
    private AnchorMacro.ShieldStep placeShieldNow(class_2338 anchorPos) {
@@ -1021,6 +1025,8 @@ public class AnchorMacro extends CrystalModule {
                      this.lastShieldProblem = "the shield spots overlap your own hitbox - step to the middle of your block";
                   } else if (this.supportFor(pos, anchorPos) == null) {
                      this.lastShieldProblem = "no face you can see or reach to click against there, other than the anchor";
+                  } else if (Stealth.legitPlace() && !LegitPlace.stillClickable(anchorPos, VanillaLimits.blockRange(), pos)) {
+                     this.lastShieldProblem = "a shield there would hide every face of the anchor you could still click to set it off";
                   } else {
                      float gain = bare - BlastShield.anchorDamageBehindShield(this.mc.field_1724, anchor, pos, shieldState);
                      if (gain < (Double)this.minShieldGain.get()) {

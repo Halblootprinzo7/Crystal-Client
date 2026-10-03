@@ -1,6 +1,7 @@
 package com.messerocks.crystal.utils;
 
 import java.util.List;
+import java.util.Set;
 import net.minecraft.class_1297;
 import net.minecraft.class_1511;
 import net.minecraft.class_1657;
@@ -42,6 +43,29 @@ public final class CrystalUtils {
             return false;
          } else {
             return legacy && !mc.field_1687.method_22347(above.method_10084()) ? false : !isObstructed(above, ignoreCrystals);
+         }
+      } else {
+         return false;
+      }
+   }
+
+   // Like canPlace, but only the given crystals are looked through: ones we have already hit and the server is
+   // about to remove. Any other crystal still blocks the spot, as it does on the server.
+   public static boolean canPlace(class_2338 base, boolean legacy, Set<Integer> goneCrystals) {
+      if (mc.field_1687 != null && isBase(base)) {
+         class_2338 above = base.method_10084();
+         if (!mc.field_1687.method_22347(above)) {
+            return false;
+         } else if (legacy && !mc.field_1687.method_22347(above.method_10084())) {
+            return false;
+         } else {
+            for (class_1297 entity : mc.field_1687.method_8335(null, crystalBox(above))) {
+               if (!(entity instanceof class_1511) || !goneCrystals.contains(entity.method_5628())) {
+                  return false;
+               }
+            }
+
+            return true;
          }
       } else {
          return false;

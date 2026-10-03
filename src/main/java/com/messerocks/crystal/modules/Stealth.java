@@ -2,6 +2,7 @@ package com.messerocks.crystal.modules;
 
 import com.messerocks.crystal.CrystalAddon;
 import com.messerocks.crystal.CrystalModule;
+import com.messerocks.crystal.utils.TurnProgress;
 import com.messerocks.crystal.utils.VanillaLimits;
 import meteordevelopment.meteorclient.events.world.TickEvent.Pre;
 import meteordevelopment.meteorclient.settings.Setting;
@@ -9,6 +10,7 @@ import meteordevelopment.meteorclient.settings.SettingGroup;
 import meteordevelopment.meteorclient.settings.BoolSetting.Builder;
 import meteordevelopment.meteorclient.systems.modules.Modules;
 import meteordevelopment.orbit.EventHandler;
+import meteordevelopment.orbit.EventPriority;
 import net.minecraft.class_1297;
 import net.minecraft.class_2338;
 import net.minecraft.class_243;
@@ -43,7 +45,7 @@ public class Stealth extends CrystalModule {
       .add(
          ((meteordevelopment.meteorclient.settings.DoubleSetting.Builder)((meteordevelopment.meteorclient.settings.DoubleSetting.Builder)new meteordevelopment.meteorclient.settings.DoubleSetting.Builder()
                   .name("max-turn-per-tick"))
-               .description("Degrees the head may turn per tick. A mouse cannot jump. 0 disables the cap."))
+               .description("Degrees the head may turn per tick, on the way to a target and on the way back to where you are looking. A mouse cannot jump. 0 disables the cap."))
             .defaultValue(45.0)
             .min(0.0)
             .sliderMax(180.0)
@@ -124,6 +126,13 @@ public class Stealth extends CrystalModule {
       if (!(rate <= 0.0)) {
          this.budget = Math.min(this.budget + elapsed * rate, rate);
       }
+   }
+
+   @EventHandler(
+      priority = EventPriority.LOWEST
+   )
+   private void onTickLast(Pre event) {
+      TurnProgress.SHARED.easeBack();
    }
 
    private static Stealth get() {

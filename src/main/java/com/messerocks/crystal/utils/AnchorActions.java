@@ -7,6 +7,7 @@ import meteordevelopment.meteorclient.utils.player.InvUtils;
 import meteordevelopment.meteorclient.utils.player.Rotations;
 import meteordevelopment.meteorclient.utils.world.BlockUtils;
 import net.minecraft.class_1268;
+import net.minecraft.class_1747;
 import net.minecraft.class_1750;
 import net.minecraft.class_1792;
 import net.minecraft.class_1799;
@@ -18,6 +19,7 @@ import net.minecraft.class_243;
 import net.minecraft.class_2680;
 import net.minecraft.class_2741;
 import net.minecraft.class_310;
+import net.minecraft.class_3489;
 import net.minecraft.class_3965;
 
 public final class AnchorActions {
@@ -93,29 +95,64 @@ public final class AnchorActions {
    }
 
    public static int findDetonationSlot() {
+      return findDetonationSlot(-1);
+   }
+
+   // Any item but glowstone sets a charged anchor off. A block is the worst choice though: should the charge
+   // not have landed, the click places that block against the anchor instead. So the preferred slot (usually the
+   // weapon you came from) and the selected one go first, then anything that is not a block, then whatever is left.
+   public static int findDetonationSlot(int preferred) {
       if (mc.field_1724 == null) {
          return -1;
       } else {
          int selected = mc.field_1724.method_31548().method_67532();
-         if (!mc.field_1724.method_31548().method_5438(selected).method_31574(class_1802.field_8801)) {
+         if (preferred >= 0 && preferred <= 8 && cleanDetonator(preferred)) {
+            return preferred;
+         } else if (cleanDetonator(selected)) {
             return selected;
          } else {
             for (int i = 0; i <= 8; i++) {
-               if (!mc.field_1724.method_31548().method_5438(i).method_31574(class_1802.field_8801)) {
+               class_1799 stack = mc.field_1724.method_31548().method_5438(i);
+               if (stack.method_7960() || stack.method_31573(class_3489.field_42611) || stack.method_31573(class_3489.field_42612)) {
                   return i;
                }
             }
 
-            return -1;
+            for (int i = 0; i <= 8; i++) {
+               if (cleanDetonator(i)) {
+                  return i;
+               }
+            }
+
+            if (!mc.field_1724.method_31548().method_5438(selected).method_31574(class_1802.field_8801)) {
+               return selected;
+            } else {
+               for (int i = 0; i <= 8; i++) {
+                  if (!mc.field_1724.method_31548().method_5438(i).method_31574(class_1802.field_8801)) {
+                     return i;
+                  }
+               }
+
+               return -1;
+            }
          }
       }
    }
 
+   private static boolean cleanDetonator(int slot) {
+      class_1799 stack = mc.field_1724.method_31548().method_5438(slot);
+      return !stack.method_31574(class_1802.field_8801) && !(stack.method_7909() instanceof class_1747);
+   }
+
    public static boolean detonate(class_2338 pos, int charges, AnchorActions.Options options) {
+      return detonate(pos, charges, options, -1);
+   }
+
+   public static boolean detonate(class_2338 pos, int charges, AnchorActions.Options options, int preferredSlot) {
       if (offhandBlocksDetonation(charges)) {
          return false;
       } else {
-         int slot = findDetonationSlot();
+         int slot = findDetonationSlot(preferredSlot);
          return slot < 0 ? false : interactMainHand(pos, slot, options);
       }
    }
@@ -242,7 +279,7 @@ public final class AnchorActions {
       } else {
          double wantedYaw = Rotations.getYaw(aim);
          double wantedPitch = Rotations.getPitch(aim);
-         if (!turn.wouldReach(TURN_OWNER, wantedYaw, wantedPitch)) {
+         if (!turn.wouldReach(TURN_OWNER, wantedYaw, wantedPitch, options.rotationPriority())) {
             turn.turnTo(TURN_OWNER, wantedYaw, wantedPitch, options.rotationPriority(), action);
             return false;
          } else {

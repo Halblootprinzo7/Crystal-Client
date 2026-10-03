@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "id": "crystal-addon",
-  "version": "0.1.0",
+  "version": "${version}",
   "name": "Crystal Addon",
   "description": "Crystal-PvP-Module fuer Meteor Client, abgestimmt auf 2b2t.",
   "icon": "assets/crystal-addon/icon.png",

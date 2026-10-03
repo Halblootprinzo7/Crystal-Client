@@ -10,7 +10,9 @@ import com.messerocks.crystal.utils.RevivedPlayers;
 import com.messerocks.crystal.utils.ServerVersion;
 import com.messerocks.crystal.utils.TurnProgress;
 import com.messerocks.crystal.utils.VanillaLimits;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
 import java.util.function.Supplier;
 import meteordevelopment.meteorclient.events.render.Render3DEvent;
@@ -48,7 +50,9 @@ import net.minecraft.class_243;
 import net.minecraft.class_2824;
 import net.minecraft.class_2879;
 import net.minecraft.class_3489;
+import net.minecraft.class_3532;
 import net.minecraft.class_3965;
+import net.minecraft.class_640;
 import net.minecraft.class_642;
 import net.minecraft.class_6862;
 
@@ -462,8 +466,10 @@ public class AutoCrystal extends CrystalModule {
    private final ActionBudget placeBudget = new ActionBudget();
    private final ActionBudget breakBudget = new ActionBudget();
    private final Set<class_2338> usedPositions = new HashSet<>();
-   private final Set<Integer> hitCrystals = new HashSet<>();
-   private final Set<class_2338> brokenBases = new HashSet<>();
+   // Crystals we have actually sent an attack for, with the tick it went out. Until the server's removal reaches
+   // us they are still in the world; hitting them again only burns the one rotation a tick that Stealth allows.
+   private final Map<Integer, Integer> attackedAt = new HashMap<>();
+   private final Set<Integer> goneCrystals = new HashSet<>();
 
    public AutoCrystal() {
       super(CrystalAddon.CATEGORY, "auto-crystal", "Places and breaks end crystals on the best target.");
@@ -481,8 +487,8 @@ public class AutoCrystal extends CrystalModule {
       this.placeBudget.reset();
       this.breakBudget.reset();
       this.usedPositions.clear();
-      this.hitCrystals.clear();
-      this.brokenBases.clear();
+      this.attackedAt.clear();
+      this.goneCrystals.clear();
    }
 
    @EventHandler
@@ -493,8 +499,7 @@ public class AutoCrystal extends CrystalModule {
          this.renderPos = null;
          this.renderDamage = 0.0;
          this.usedPositions.clear();
-         this.hitCrystals.clear();
-         this.brokenBases.clear();
+         this.forgetOldAttacks();
          this.workAvailable = false;
          this.turnBusy = false;
          this.idleReason = null;
@@ -804,7 +809,7 @@ public class AutoCrystal extends CrystalModule {
          double bestDamage = 0.0;
 
          for (class_1297 entity : this.mc.field_1687.method_18112()) {
-            if (entity instanceof class_1511 crystal && !crystal.method_31481() && !this.hitCrystals.contains(crystal.method_5628())) {
+            if (entity instanceof class_1511 crystal && !crystal.method_31481() && !this.goneCrystals.contains(crystal.method_5628())) {
                class_243 pos = crystal.method_73189();
                if (this.canHit(crystal.method_5829())
                   && Stealth.allowsEntity(crystal)
@@ -842,11 +847,34 @@ public class AutoCrystal extends CrystalModule {
             this.renderDamage = bestDamage;
          }
 
-         this.hitCrystals.add(best.method_5628());
-         if (this.attack(best)) {
-            this.brokenBases.add(class_2338.method_49638(best.method_73189()).method_10074());
+         this.goneCrystals.add(best.method_5628());
+         this.attack(best);
+         if (!this.breakBudget.canAfford(0.0)) {
+            return;
          }
       }
+   }
+
+   private void forgetOldAttacks() {
+      int now = this.mc.field_1724.field_6012;
+      int window = this.attackMemory();
+      this.attackedAt.values().removeIf(tick -> now - tick > window || now < tick);
+      this.goneCrystals.clear();
+      this.goneCrystals.addAll(this.attackedAt.keySet());
+   }
+
+   // Ticks an attack is trusted before the crystal may be hit again: one round trip plus a little slack.
+   // If the server refused the hit, the crystal is simply still there afterwards and gets hit again.
+   private int attackMemory() {
+      int ping = 0;
+      if (this.mc.method_1562() != null) {
+         class_640 entry = this.mc.method_1562().method_2871(this.mc.field_1724.method_5667());
+         if (entry != null) {
+            ping = entry.method_2959();
+         }
+      }
+
+      return class_3532.method_15340(ping / 50 + 2, 2, 20);
    }
 
    private String ignoredPlayerReason() {
@@ -965,6 +993,9 @@ public class AutoCrystal extends CrystalModule {
 
             this.usedPositions.add(best);
             this.placeAt(best, aim);
+            if (!this.placeBudget.canAfford(0.0)) {
+               return;
+            }
          }
       }
    }
@@ -1043,6 +1074,10 @@ public class AutoCrystal extends CrystalModule {
    }
 
    private double placementDamage(class_2338 base, boolean legacy, double required, double selfHealth) {
+      if (!CrystalUtils.isBase(base)) {
+         return 0.0;
+      }
+
       class_243 crystal = CrystalUtils.crystalPos(base);
       if (!CrystalUtils.inRange(crystal, this.placeReach(), Math.min((Double)this.placeWallRange.get(), this.placeReach()))) {
          return 0.0;
@@ -1050,7 +1085,7 @@ public class AutoCrystal extends CrystalModule {
          return 0.0;
       } else if (!this.aimAllows(crystal)) {
          return 0.0;
-      } else if (!CrystalUtils.canPlace(base, legacy, this.brokenBases.contains(base))) {
+      } else if (!CrystalUtils.canPlace(base, legacy, this.goneCrystals)) {
          return 0.0;
       } else if ((Boolean)this.doBreak.get() && !this.canHit(CrystalUtils.crystalBox(base.method_10084()))) {
          return 0.0;
@@ -1070,6 +1105,7 @@ public class AutoCrystal extends CrystalModule {
    private boolean attack(class_1511 crystal) {
       Runnable action = () -> {
          this.mc.field_1724.field_3944.method_52787(class_2824.method_34206(crystal, this.mc.field_1724.method_5715()));
+         this.attackedAt.put(crystal.method_5628(), this.mc.field_1724.field_6012);
          if ((Boolean)this.swing.get()) {
             this.mc.field_1724.method_6104(class_1268.field_5808);
          } else {

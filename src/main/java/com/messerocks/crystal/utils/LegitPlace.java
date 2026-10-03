@@ -49,6 +49,22 @@ public final class LegitPlace {
       return clickOn(pos, reach);
    }
 
+   // Same, but as if a block stood at obstacle too. Lets a caller check that something it is about to place
+   // (a blast shield) does not hide the block it still has to click afterwards.
+   public static LegitPlace.Result forExistingBlock(class_2338 pos, double reach, class_2338 obstacle) {
+      if (obstacle == null) {
+         return clickOn(pos, reach);
+      } else if (mc.field_1724 == null || mc.field_1687 == null || mc.field_1687.method_8320(pos).method_26215()) {
+         return null;
+      } else {
+         class_243 eyes = mc.field_1724.method_33571();
+         class_238 blocker = new class_238(obstacle);
+         Predicate<class_3965> onBlock = hit -> hit.method_17777().equals(pos) && blocker.method_992(eyes, hit.method_17784()).isEmpty();
+         LegitPlace.Result result = best(facePoints(pos, null, false, reach), reach, onBlock);
+         return result != null ? result : best(facePoints(pos, null, true, reach), reach, onBlock);
+      }
+   }
+
    public static LegitPlace.Result forBlock(class_2338 pos, double reach) {
       return forBlock(pos, reach, null);
    }
@@ -60,6 +76,51 @@ public final class LegitPlace {
          return result != null ? result : best(placementPoints(pos, exclude, true, reach), reach, placesHere);
       } else {
          return null;
+      }
+   }
+
+   // Whether a block at pos could still be clicked with a block standing at obstacle. For a spot that is still
+   // air (the anchor is not placed yet) it pretends a full cube stands there and asks the same question.
+   public static boolean stillClickable(class_2338 pos, double reach, class_2338 obstacle) {
+      if (mc.field_1724 == null || mc.field_1687 == null) {
+         return false;
+      } else if (!mc.field_1687.method_8320(pos).method_26215()) {
+         return forExistingBlock(pos, reach, obstacle) != null;
+      } else {
+         class_243 eyes = mc.field_1724.method_33571();
+         class_238 cube = new class_238(pos);
+         class_238 blocker = new class_238(obstacle);
+         if (cube.method_49271(eyes) > reach * reach) {
+            return false;
+         } else {
+            class_243 centre = cube.method_1005();
+
+            for (class_2350 face : class_2350.values()) {
+               class_243 faceCentre = centre.method_1031(face.method_10148() * 0.5, face.method_10164() * 0.5, face.method_10165() * 0.5);
+               class_243 toEyes = eyes.method_1020(faceCentre);
+               if (!(toEyes.field_1352 * face.method_10148() + toEyes.field_1351 * face.method_10164() + toEyes.field_1350 * face.method_10165() <= 1.0E-6)) {
+                  for (int du = -1; du <= 1; du++) {
+                     for (int dv = -1; dv <= 1; dv++) {
+                        class_243 point = switch (face.method_10166()) {
+                           case field_11048 -> faceCentre.method_1031(0.0, du * 0.3, dv * 0.3);
+                           case field_11052 -> faceCentre.method_1031(du * 0.3, 0.0, dv * 0.3);
+                           case field_11051 -> faceCentre.method_1031(du * 0.3, dv * 0.3, 0.0);
+                           default -> throw new MatchException(null, null);
+                        };
+                        if (!(eyes.method_1025(point) > reach * reach) && blocker.method_992(eyes, point).isEmpty()) {
+                           class_3965 hit = mc.field_1687
+                              .method_17742(new class_3959(eyes, point, class_3960.field_17559, class_242.field_1348, mc.field_1724));
+                           if (hit == null || hit.method_17783() == class_240.field_1333) {
+                              return true;
+                           }
+                        }
+                     }
+                  }
+               }
+            }
+
+            return false;
+         }
       }
    }
 
