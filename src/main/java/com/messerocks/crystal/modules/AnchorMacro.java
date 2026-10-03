@@ -111,7 +111,7 @@ public class AnchorMacro extends CrystalModule {
    private final Setting<Double> speed = this.sgGeneral
       .add(
          ((meteordevelopment.meteorclient.settings.DoubleSetting.Builder)((meteordevelopment.meteorclient.settings.DoubleSetting.Builder)new meteordevelopment.meteorclient.settings.DoubleSetting.Builder()
-                  .name("speed"))
+                  .name("click-speed"))
                .description(
                   "Clicks per second across the whole cycle - placing, charging, shielding and detonating all draw from this, at an irregular spacing. Applies to a single press too, not just a held key. Two clicks of the macro are at least one tick apart regardless."
                ))
@@ -503,7 +503,9 @@ public class AnchorMacro extends CrystalModule {
                this.detonatedAge = 0;
             }
 
-            if (this.blastShown != null && this.sightings.reacted(this.blastShown)) {
+            // It was our own blast: once the anchor is gone there is nothing to react to, the next cycle may start a tick
+            // later. Waiting the reaction time out on top cost about 200 ms between two anchors.
+            if (this.blastShown != null && this.ticks > this.blastShown.tick()) {
                this.blastShown = null;
             }
 

@@ -2,6 +2,7 @@ package com.messerocks.crystal.modules;
 
 import com.messerocks.crystal.CrystalAddon;
 import com.messerocks.crystal.CrystalModule;
+import meteordevelopment.meteorclient.mixininterface.IPlayerInteractEntityC2SPacket;
 import net.minecraft.class_2246;
 import net.minecraft.class_2885;
 import meteordevelopment.meteorclient.events.packets.PacketEvent.Send;
@@ -878,6 +879,19 @@ public class AutoCrystal extends CrystalModule {
    // time the packet is built the client has already predicted the block into the world.
    @EventHandler
    private void onClickSent(Send event) {
+      if (event.packet instanceof class_2824 hit
+         && this.mc.field_1724 != null
+         && "ATTACK".equals(String.valueOf(((IPlayerInteractEntityC2SPacket)hit).meteor$getType()))
+         && ((IPlayerInteractEntityC2SPacket)hit).meteor$getEntity() instanceof class_1657 victim) {
+         // Your own melee hit opens the victim's damage window just like a crystal of ours does. Smart-delay treated it
+         // as a hit from elsewhere and waited the whole half second out; knowing what it dealt, a crystal that clears it
+         // by min-break-damage goes off right away, as after our own crystal.
+         float raw = this.meleeRaw();
+         if (raw > 0.0F) {
+            this.recordOwnHit(victim.method_5628(), raw);
+         }
+      }
+
       if (event.packet instanceof class_2885 click && this.mc.field_1724 != null && this.mc.field_1687 != null) {
          class_1799 stack = this.mc.field_1724.method_5998(click.method_12546());
          if (stack.method_7960() || stack.method_31574(class_1802.field_8281)) {
@@ -944,9 +958,9 @@ public class AutoCrystal extends CrystalModule {
          class_243 crystal = CrystalUtils.crystalPos(base);
          if (!this.withinReach(base)) {
             return AutoCrystal.Gate.REACH;
-         } else if (!Stealth.inView(crystal)) {
+         } else if (!Stealth.inView(new class_238(base))) {
             return AutoCrystal.Gate.VIEW;
-         } else if (!Stealth.allowsBlock(base, crystal)) {
+         } else if (!VanillaLimits.canReachBlock(base)) {
             return AutoCrystal.Gate.REACH;
          } else if (!this.aimAllows(crystal)) {
             return AutoCrystal.Gate.AIM;
@@ -1690,6 +1704,11 @@ public class AutoCrystal extends CrystalModule {
          class_2338 looking = this.lookingAt();
          return looking != null && !this.blockedByPending(looking) ? this.acceptable(looking, legacy, required, selfHealth) : null;
       } else {
+         AutoCrystal.Spot yours = this.ownBaseInCrosshair(legacy, required, selfHealth);
+         if (yours != null) {
+            return yours;
+         }
+
          AutoCrystal.SpotPick<AutoCrystal.Spot> pick = new AutoCrystal.SpotPick<>();
 
          for (class_2338 base : this.basesForTarget()) {
@@ -1722,6 +1741,36 @@ public class AutoCrystal extends CrystalModule {
          }
 
          return pick.best();
+      }
+   }
+
+   // Obsidian you just placed and are now looking at is the spot you want crystalled - that is why you put it there.
+   // It goes first, needs no reaction, and only has to clear the face-place damage floor instead of min-damage: right
+   // after a hit the target is flying away, and the predicted damage on your block easily drops under the full floor.
+   // Self-damage limits still apply as usual.
+   private AutoCrystal.Spot ownBaseInCrosshair(boolean legacy, double required, double selfHealth) {
+      class_2338 looking = this.lookingAt();
+      Integer placedAt = looking == null ? null : this.ownBases.get(looking);
+      if (placedAt == null || this.clientTicks - placedAt > OWN_BASE_TICKS || this.blockedByPending(looking)) {
+         return null;
+      } else {
+         double floor = Math.min(required, (Double)this.facePlaceMinDamage.get());
+         double score = this.placementScore(looking, legacy, floor, selfHealth, Double.NEGATIVE_INFINITY);
+         if (Double.isNaN(score)) {
+            return null;
+         } else {
+            AutoCrystal.Aim aim = this.cachedReachableAim(looking);
+            if (aim == null) {
+               return null;
+            } else {
+               this.renderPos = looking;
+               if (this.scoredDamage > this.renderDamage) {
+                  this.renderDamage = this.scoredDamage;
+               }
+
+               return new AutoCrystal.Spot(looking, aim);
+            }
+         }
       }
    }
 
@@ -1841,8 +1890,11 @@ public class AutoCrystal extends CrystalModule {
       }
    }
 
+   // Line of sight is not checked to the top of the block: a crystal goes on top whichever face of the obsidian is
+   // clicked, so a base whose top you cannot see (above eye level, or covered) is fine as long as some face is in
+   // reach and sight. reachableAim() looks for that face; this only keeps out what is out of reach or behind you.
    private boolean usableBase(class_2338 base, class_243 crystal) {
-      return this.withinReach(base) && Stealth.allowsBlock(base, crystal) && this.aimAllows(crystal);
+      return this.withinReach(base) && VanillaLimits.canReachBlock(base) && Stealth.inView(new class_238(base)) && this.aimAllows(crystal);
    }
 
    private List<class_2338> scanBases() {
@@ -1962,6 +2014,24 @@ public class AutoCrystal extends CrystalModule {
 
    private static boolean stabs(class_1799 stack) {
       return stack.method_57826(class_9334.field_63631);
+   }
+
+   // What the hit about to go out deals before armour, the amount vanilla compares the next hit against inside the
+   // damage window: attack damage for the charge, sharpness, and a critical hit when one is possible. Errs high, so a
+   // crystal is never counted for more than it adds.
+   private float meleeRaw() {
+      float charge = this.mc.field_1724.method_7261(0.5F);
+      double damage = this.mc.field_1724.method_45325(class_5134.field_23721) * (0.2 + charge * charge * 0.8);
+      int sharpness = Utils.getEnchantmentLevel(this.mc.field_1724.method_6047(), class_1893.field_9118);
+      if (sharpness > 0) {
+         damage += (1.0 + 0.5 * (sharpness - 1)) * charge;
+      }
+
+      if (charge > 0.9F && !this.mc.field_1724.method_24828()) {
+         damage *= 1.5;
+      }
+
+      return (float)damage;
    }
 
    private double attackDamage(class_1799 stack) {
