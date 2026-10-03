@@ -247,6 +247,17 @@ public class AutoCrystal extends CrystalModule {
                .visible(this.place::get))
             .build()
       );
+   private final Setting<Boolean> farPlace = this.sgPlace
+      .add(
+         new meteordevelopment.meteorclient.settings.BoolSetting.Builder()
+            .name("far-place")
+            .description(
+               "Also place on obsidian that is in place reach (4.5) but where the crystal would stand beyond hit reach (3.0) - vanilla lets you place that far, only the hit has to wait until you are close enough. Spots you can hit right away are always taken first, and no second far crystal is put down while one already stands out of reach."
+            )
+            .defaultValue(true)
+            .visible(this.place::get)
+            .build()
+      );
    private final Setting<Double> minDamage = this.sgPlace
       .add(
          ((Builder)((Builder)((Builder)new Builder().name("min-damage")).description("Do not place unless the crystal deals at least this much to the target."))
@@ -983,7 +994,7 @@ public class AutoCrystal extends CrystalModule {
                } else if (this.placeAim(base) == null) {
                   return AutoCrystal.Gate.NO_FACE;
                } else {
-                  return this.doBreak.get() && this.hitAim(CrystalUtils.crystalHitbox(base)) == null ? AutoCrystal.Gate.UNBREAKABLE : null;
+                  return this.doBreak.get() && !this.farPlace.get() && !this.hittableAt(base) ? AutoCrystal.Gate.UNBREAKABLE : null;
                }
             } else {
                return AutoCrystal.Gate.LOW_DAMAGE;
@@ -1704,7 +1715,35 @@ public class AutoCrystal extends CrystalModule {
       if (aim == null) {
          return null;
       } else {
-         return this.doBreak.get() && this.hitAim(CrystalUtils.crystalHitbox(base)) == null ? null : aim;
+         return this.doBreak.get() && !this.farPlace.get() && !this.hittableAt(base) ? null : aim;
+      }
+   }
+
+   // Whether the crystal on this base could be hit from where you stand right now.
+   private boolean hittableAt(class_2338 base) {
+      return !(Boolean)this.doBreak.get() || this.hitAim(CrystalUtils.crystalHitbox(base)) != null;
+   }
+
+   // far-place: a crystal goes down beyond hit reach only while none of the ones already standing is waiting there to
+   // be walked up to - one crystal ahead of you is the play, a row of them is just thrown away.
+   private boolean farPlacingAllowed() {
+      if (!(Boolean)this.farPlace.get()) {
+         return false;
+      } else {
+         class_243 eyes = this.mc.field_1724.method_33571();
+         double hit = this.breakReach();
+         double around = this.placeReach() + 2.0;
+
+         for (class_1297 entity : this.mc.field_1687.method_18112()) {
+            if (entity instanceof class_1511 crystal && !crystal.method_31481()) {
+               double distance = crystal.method_5829().method_49271(eyes);
+               if (distance >= hit * hit && distance < around * around && this.maxTargetDamage(crystal.method_73189(), false) > 0.0F) {
+                  return false;
+               }
+            }
+         }
+
+         return true;
       }
    }
 
@@ -1718,20 +1757,30 @@ public class AutoCrystal extends CrystalModule {
             return yours;
          }
 
-         AutoCrystal.SpotPick<AutoCrystal.Spot> pick = new AutoCrystal.SpotPick<>();
+         // Spots whose crystal can be hit from here come first; with far-place on, a spot only in place reach is taken
+         // when there is no such spot at all, not even one still waiting out the reaction time.
+         AutoCrystal.SpotPick<AutoCrystal.Spot> near = new AutoCrystal.SpotPick<>();
+         AutoCrystal.SpotPick<AutoCrystal.Spot> far = new AutoCrystal.SpotPick<>();
+         boolean farAllowed = this.farPlacingAllowed();
 
          for (class_2338 base : this.basesForTarget()) {
             if (!this.blockedByPending(base)) {
-               double score = this.placementScore(base, legacy, required, selfHealth, pick.beat(), true);
-               if (!Double.isNaN(score)) {
-                  float damage = this.scoredDamage;
-                  AutoCrystal.Aim aim = this.cachedReachableAim(base);
-                  if (aim != null) {
-                     pick.offer(new AutoCrystal.Spot(base, aim), score, damage, this.spotReady(base));
+               boolean hittable = this.hittableAt(base);
+               if (hittable || farAllowed) {
+                  AutoCrystal.SpotPick<AutoCrystal.Spot> into = hittable ? near : far;
+                  double score = this.placementScore(base, legacy, required, selfHealth, into.beat(), true);
+                  if (!Double.isNaN(score)) {
+                     float damage = this.scoredDamage;
+                     AutoCrystal.Aim aim = this.cachedReachableAim(base);
+                     if (aim != null) {
+                        into.offer(new AutoCrystal.Spot(base, aim), score, damage, this.spotReady(base));
+                     }
                   }
                }
             }
          }
+
+         AutoCrystal.SpotPick<AutoCrystal.Spot> pick = near.best() == null && near.waiting() == null ? far : near;
 
          if (pick.waiting() != null) {
             this.placeWaiting = true;
@@ -1850,7 +1899,7 @@ public class AutoCrystal extends CrystalModule {
       double place = this.placeReach();
       if (new class_238(base).method_49271(eyes) >= place * place) {
          return false;
-      } else if (!(Boolean)this.doBreak.get()) {
+      } else if (!(Boolean)this.doBreak.get() || (Boolean)this.farPlace.get()) {
          return true;
       } else {
          double hit = this.breakReach();

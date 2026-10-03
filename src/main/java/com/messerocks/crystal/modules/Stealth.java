@@ -41,11 +41,11 @@ public class Stealth extends CrystalModule {
          ((meteordevelopment.meteorclient.settings.DoubleSetting.Builder)((meteordevelopment.meteorclient.settings.DoubleSetting.Builder)new meteordevelopment.meteorclient.settings.DoubleSetting.Builder()
                   .name("max-turn-per-tick"))
                .description(
-                  "Degrees the head may turn per tick at the fastest point of a turn. A mouse cannot jump: 90 is already a very fast flick, which is why it cannot go higher."
+                  "Degrees the head may turn per tick at the fastest point of a turn. 90 is already a very fast flick; up to 180 turns onto anything in front of you within a single tick."
                ))
             .defaultValue(45.0)
-            .range(5.0, 90.0)
-            .sliderRange(5.0, 90.0)
+            .range(5.0, 180.0)
+            .sliderRange(5.0, 180.0)
             .build()
       );
    private final Setting<Double> viewAngle = this.sgLimits
@@ -65,11 +65,11 @@ public class Stealth extends CrystalModule {
          ((meteordevelopment.meteorclient.settings.IntSetting.Builder)((meteordevelopment.meteorclient.settings.IntSetting.Builder)((meteordevelopment.meteorclient.settings.IntSetting.Builder)new meteordevelopment.meteorclient.settings.IntSetting.Builder()
                      .name("reaction-time"))
                   .description(
-                     "Ticks between something happening - a pop, a crystal appearing, an enemy raising a shield - and the first action that answers it. People need about 150 ms (3 ticks) at their very best."
+                     "Ticks between something happening - a pop, a crystal appearing, an enemy raising a shield - and the first action that answers it. People need about 150 ms (3 ticks) at their very best; 0 answers in the same tick."
                   ))
                .defaultValue(4))
-            .range(3, 20)
-            .sliderRange(3, 10)
+            .range(0, 20)
+            .sliderRange(0, 10)
             .build()
       );
    private final Setting<Double> smoothness = this.sgPacing
@@ -77,11 +77,11 @@ public class Stealth extends CrystalModule {
          ((meteordevelopment.meteorclient.settings.DoubleSetting.Builder)((meteordevelopment.meteorclient.settings.DoubleSetting.Builder)new meteordevelopment.meteorclient.settings.DoubleSetting.Builder()
                   .name("aim-smoothness"))
                .description(
-                  "How much the turn follows a human reaching curve instead of a straight ramp. Low values turn at nearly constant speed, which no hand produces; 1 accelerates and decelerates like an arm, which takes about 1.9x as long for the same angle."
+                  "How much the turn follows a human reaching curve instead of a straight ramp. 0 turns at constant top speed and arrives soonest; 1 accelerates and decelerates like an arm, which takes about 1.9x as long for the same angle."
                ))
             .defaultValue(0.7)
-            .range(0.3, 1.0)
-            .sliderRange(0.3, 1.0)
+            .range(0.0, 1.0)
+            .sliderRange(0.0, 1.0)
             .build()
       );
    private final Setting<Double> jitter = this.sgPacing
@@ -90,18 +90,30 @@ public class Stealth extends CrystalModule {
                   .name("timing-jitter"))
                .description("Varies every delay by this fraction. An exact period is something no hand produces."))
             .defaultValue(0.3)
-            .range(0.1, 1.0)
-            .sliderRange(0.1, 1.0)
+            .range(0.0, 1.0)
+            .sliderRange(0.0, 1.0)
             .build()
       );
    private final Setting<Double> globalRate = this.sgPacing
       .add(
          ((meteordevelopment.meteorclient.settings.DoubleSetting.Builder)((meteordevelopment.meteorclient.settings.DoubleSetting.Builder)new meteordevelopment.meteorclient.settings.DoubleSetting.Builder()
                   .name("max-actions-per-second"))
-               .description("Clicks per second across all modules together. Both hands of a fast player together; it cannot go higher than 20."))
+               .description(
+                  "Clicks per second across all modules together, left and right button counted together. Each button still clicks at most once a tick, so 40 lets both run every tick."
+               ))
             .defaultValue(12.0)
-            .range(1.0, 20.0)
-            .sliderRange(1.0, 20.0)
+            .range(1.0, 40.0)
+            .sliderRange(1.0, 40.0)
+            .build()
+      );
+   private final Setting<Boolean> sameTickSwitch = this.sgPacing
+      .add(
+         new meteordevelopment.meteorclient.settings.BoolSetting.Builder()
+            .name("same-tick-switch")
+            .description(
+               "Let a module select a hotbar slot and click with it in the same tick, as when a number key and a mouse button go down within the same 50 ms - vanilla handles the key first, then the click. Off, every click waits a tick after a slot change; on, the anchor macro and the crystal aura save that tick at every item switch."
+            )
+            .defaultValue(false)
             .build()
       );
    private final Setting<Double> skipChance = this.sgPacing
@@ -180,6 +192,10 @@ public class Stealth extends CrystalModule {
 
    public static boolean legitPlace() {
       return (Boolean)settings().legitPlace.get();
+   }
+
+   public static boolean sameTickSwitch() {
+      return (Boolean)settings().sameTickSwitch.get();
    }
 
    public static double aimSmoothness() {

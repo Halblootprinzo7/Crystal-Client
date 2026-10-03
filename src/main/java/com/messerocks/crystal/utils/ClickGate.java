@@ -5,6 +5,7 @@ import meteordevelopment.meteorclient.events.packets.PacketEvent.Send;
 import meteordevelopment.meteorclient.events.world.TickEvent.Pre;
 import meteordevelopment.meteorclient.mixininterface.IClientPlayerInteractionManager;
 import meteordevelopment.meteorclient.mixininterface.IPlayerInteractEntityC2SPacket;
+import com.messerocks.crystal.modules.Stealth;
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.class_2813;
 import net.minecraft.class_2824;
@@ -37,11 +38,11 @@ public final class ClickGate {
    }
 
    public static boolean canUse() {
-      return useTick != tick && slotTick != tick && !inventoryRecently();
+      return useTick != tick && !slotChangedThisTick() && !inventoryRecently();
    }
 
    public static boolean canAttack() {
-      return attackTick != tick && useTick != tick && slotTick != tick && !inventoryRecently();
+      return attackTick != tick && useTick != tick && !slotChangedThisTick() && !inventoryRecently();
    }
 
    public static boolean canClickInventory() {
@@ -64,8 +65,11 @@ public final class ClickGate {
       return clickTick == tick;
    }
 
+   // Whether a click has to wait for the slot that was just selected. Vanilla reads the number keys before the mouse
+   // buttons in the same tick, so a switch and a click in one tick is something a player can do; Stealth's
+   // same-tick-switch allows it, otherwise the click waits a tick after the switch.
    public static boolean slotChangedThisTick() {
-      return slotTick == tick;
+      return slotTick == tick && !Stealth.sameTickSwitch();
    }
 
    private static void noteWorldAction(Send event) {
