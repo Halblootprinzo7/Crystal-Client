@@ -816,7 +816,9 @@ public class AutoCrystal extends CrystalModule {
          class_2338 at = base.method_10084();
 
          for (class_1511 crystal : this.mc.field_1687.method_8390(class_1511.class, new class_238(at), c -> !c.method_31481() && c.method_24515().equals(at))) {
-            if (this.ownCrystals.appeared(crystal.method_5628(), base, this.clientTicks + ownStep())) {
+            // Hittable the tick it shows up. You placed it to hit it; a player spamming the attack button lands the
+            // first tick it exists, which is what a d-tap needs - the old two-to-three tick wait let the window close.
+            if (this.ownCrystals.appeared(crystal.method_5628(), base, this.clientTicks)) {
                this.worth.placedForIt(crystal.method_5628());
             }
          }
@@ -894,6 +896,13 @@ public class AutoCrystal extends CrystalModule {
 
       if (event.packet instanceof class_2885 click && this.mc.field_1724 != null && this.mc.field_1687 != null) {
          class_1799 stack = this.mc.field_1724.method_5998(click.method_12546());
+         class_2338 base = click.method_12543().method_17777().method_10062();
+         if (stack.method_31574(class_1802.field_8301) && CrystalUtils.isBase(base) && !this.placed.contains(base)) {
+            // A crystal you put down yourself (right-click, a macro) is as much yours as one this aura placed: break it
+            // the moment it appears instead of waiting out the reaction time for a stranger's crystal.
+            this.placed.sent(base, this.clientTicks);
+         }
+
          if (stack.method_7960() || stack.method_31574(class_1802.field_8281)) {
             class_3965 hit = click.method_12543();
             class_2338 clicked = hit.method_17777().method_10062();
