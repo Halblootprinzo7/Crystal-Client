@@ -223,8 +223,6 @@ public class Stealth extends CrystalModule {
          return false;
       } else if (mc.field_1724.method_5765()) {
          return false;
-      } else if (TurnProgress.movementKeysHeld() && TurnProgress.SHARED.holdsMovement()) {
-         return false;
       } else {
          return (TurnProgress.ownClickPending() || TurnProgress.cameraRequested() || mc.field_1724.method_6128()) && TurnProgress.SHARED.ownClickMismatched()
             ? false

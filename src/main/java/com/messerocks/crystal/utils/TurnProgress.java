@@ -366,17 +366,15 @@ public final class TurnProgress {
       return SHARED.clientTick <= cameraRequestUntil;
    }
 
+   // Rotations are server-side only and the camera stays where you put it. Walking does not need the head on the
+   // camera any more: only your own click, an explicit request (Sword Place) and elytra steering do.
    public static boolean cameraNeeded() {
-      return movementKeysHeld() || ownClickPending() || cameraRequested() || mc.field_1724 != null && mc.field_1724.method_6128();
+      return ownClickPending() || cameraRequested() || mc.field_1724 != null && mc.field_1724.method_6128();
    }
 
    private static boolean refusesLook(double yaw, double pitch) {
-      if (movementKeysHeld() && steersDifferently(yaw, pitch)) {
-         return true;
-      } else {
-         boolean exact = mc.field_1724.method_6128() || ownClickPending() || cameraRequested();
-         return exact && !sameRotation(yaw, pitch, mc.field_1724.method_36454(), mc.field_1724.method_36455());
-      }
+      boolean exact = mc.field_1724.method_6128() || ownClickPending() || cameraRequested();
+      return exact && !sameRotation(yaw, pitch, mc.field_1724.method_36454(), mc.field_1724.method_36455());
    }
 
    public static boolean movementKeysHeld() {
@@ -384,35 +382,9 @@ public final class TurnProgress {
       return options.field_1894.method_1434() || options.field_1881.method_1434() || options.field_1913.method_1434() || options.field_1849.method_1434();
    }
 
-   private static boolean steersDifferently(double yaw, double pitch) {
-      if (Math.abs(class_3532.method_15338(yaw - mc.field_1724.method_36454())) > 0.001) {
-         return true;
-      } else {
-         boolean pitchSteers = mc.field_1724.method_5799() || mc.field_1724.method_6128() || mc.field_1724.method_31549().field_7479;
-         return pitchSteers && Math.abs(pitch - mc.field_1724.method_36455()) > 0.001;
-      }
-   }
-
+   // Used to stop your walking while a module held the head elsewhere. With server-only rotation you keep moving.
    public boolean holdsMovement() {
-      if (mc.field_1724 == null) {
-         return false;
-      } else {
-         double yaw;
-         double pitch;
-         if (this.rotationQueuedThisTick()) {
-            yaw = this.tickYaw;
-            pitch = this.tickPitch;
-         } else {
-            if (!this.easing || !Rotations.rotating) {
-               return false;
-            }
-
-            yaw = Rotations.serverYaw;
-            pitch = Rotations.serverPitch;
-         }
-
-         return steersDifferently(yaw, pitch);
-      }
+      return false;
    }
 
    public boolean ownClickMismatched() {
