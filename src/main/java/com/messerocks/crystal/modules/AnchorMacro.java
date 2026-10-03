@@ -92,7 +92,7 @@ public class AnchorMacro extends CrystalModule {
                   ))
                .defaultValue(3.0)
                .range(0.1, 20.0)
-               .sliderRange(0.1, 5.0)
+               .sliderRange(0.1, 20.0)
                .visible(() -> this.trigger.get() == AnchorMacro.Trigger.Hold))
             .build()
       );
@@ -106,6 +106,18 @@ public class AnchorMacro extends CrystalModule {
                .defaultValue(0))
             .min(0)
             .sliderRange(0, 40)
+            .build()
+      );
+   private final Setting<Integer> shieldWait = this.sgGeneral
+      .add(
+         new meteordevelopment.meteorclient.settings.IntSetting.Builder()
+            .name("shield-wait")
+            .description(
+               "Ticks between placing the shield block and detonating. 0 works it out from your ping so the server has confirmed the shield first, which is the safe choice; 1 detonates on the very next tick - fastest, but if the server refused the shield you take the blast unshielded."
+            )
+            .defaultValue(0)
+            .range(0, 10)
+            .sliderRange(0, 10)
             .build()
       );
    private final Setting<Double> speed = this.sgGeneral
@@ -739,6 +751,11 @@ public class AnchorMacro extends CrystalModule {
       return charges < 0 ? AnchorMacro.AnchorState.Air : (charges > 0 ? AnchorMacro.AnchorState.Loaded : AnchorMacro.AnchorState.Anchor);
    }
 
+   private int shieldWaitTicks() {
+      int fixed = (Integer)this.shieldWait.get();
+      return fixed > 0 ? fixed : Math.max(1, this.predictionWindow() - 3);
+   }
+
    private int predictionWindow() {
       if ((Integer)this.predictionTicks.get() > 0) {
          return (Integer)this.predictionTicks.get();
@@ -982,7 +999,7 @@ public class AnchorMacro extends CrystalModule {
 
                         // Detonate only once the shield had time to be confirmed; the client shows it the moment the
                         // click goes out, whether the server accepts it or not.
-                        if (this.ticks - this.shieldSentAt < Math.max(1, this.predictionWindow() - 3)) {
+                        if (this.ticks - this.shieldSentAt < this.shieldWaitTicks()) {
                            return;
                         }
                      }

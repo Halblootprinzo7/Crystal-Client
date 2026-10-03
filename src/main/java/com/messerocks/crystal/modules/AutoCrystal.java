@@ -366,6 +366,19 @@ public class AutoCrystal extends CrystalModule {
                .visible(this.doBreak::get))
             .build()
       );
+   private final Setting<Integer> replaceDelay = this.sgBreak
+      .add(
+         new meteordevelopment.meteorclient.settings.IntSetting.Builder()
+            .name("replace-delay")
+            .description(
+               "Ticks after a crystal is hit before the next one goes on that obsidian. 1 is the fastest - the hit and the new crystal arrive at the server in that order, so the spot is free by then; 2 gives the server's answer a tick to come back first."
+            )
+            .defaultValue(2)
+            .range(1, 5)
+            .sliderRange(1, 5)
+            .visible(this.doBreak::get)
+            .build()
+      );
    private final Setting<Boolean> smartDelay = this.sgBreak
       .add(
          ((meteordevelopment.meteorclient.settings.BoolSetting.Builder)((meteordevelopment.meteorclient.settings.BoolSetting.Builder)((meteordevelopment.meteorclient.settings.BoolSetting.Builder)((meteordevelopment.meteorclient.settings.BoolSetting.Builder)new meteordevelopment.meteorclient.settings.BoolSetting.Builder()
@@ -817,8 +830,9 @@ public class AutoCrystal extends CrystalModule {
       }
    }
 
-   private static int ownStep() {
-      return Math.max(2, Stealth.pace(2));
+   private int ownStep() {
+      int ticks = (Integer)this.replaceDelay.get();
+      return Math.max(ticks, Stealth.pace(ticks));
    }
 
    private void trackOwnWork(Set<Integer> brokenByUs) {
