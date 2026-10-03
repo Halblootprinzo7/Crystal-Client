@@ -30,6 +30,7 @@ import net.minecraft.class_2246;
 import net.minecraft.class_2338;
 import net.minecraft.class_238;
 import net.minecraft.class_243;
+import net.minecraft.class_304;
 import net.minecraft.class_3489;
 import net.minecraft.class_3532;
 import net.minecraft.class_3959;
@@ -198,15 +199,29 @@ public class SwordPlace extends CrystalModule {
                this.lastPlaced = target;
                if ((Boolean)this.debug.get()) {
                   this.info("Sent click -> %d %d %d", new Object[]{target.method_10263(), target.method_10264(), target.method_10260()});
-                  if (this.mc.field_1690.field_1904.method_1434()) {
-                     this.warning("Your bind is also Minecraft's \"Use Item\" key - vanilla places a second block. Unbind one of the two.", new Object[0]);
-                  }
                }
             } else {
                this.expirePress();
             }
          }
+
+         if (pressed || this.pending > 0 || this.humanReturn != -1) {
+            this.suppressVanillaUse();
+         }
       }
+   }
+
+   // The place bind is usually the right mouse button, which is also Minecraft's own use key. Vanilla handles that
+   // key right after this tick event, and whenever obsidian is in the main hand by then (switched in for this press,
+   // left there by Stay, or not switched back yet) it would place a second block from it, again every 4 ticks while
+   // the button is held. So while a press is ours, the use key is swallowed.
+   private void suppressVanillaUse() {
+      class_304 use = this.mc.field_1690.field_1904;
+
+      while (use.method_1436()) {
+      }
+
+      use.method_23481(false);
    }
 
    private void expirePress() {
