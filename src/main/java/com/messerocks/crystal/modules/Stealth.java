@@ -3,43 +3,35 @@ package com.messerocks.crystal.modules;
 import com.messerocks.crystal.CrystalAddon;
 import com.messerocks.crystal.CrystalModule;
 import com.messerocks.crystal.utils.AimUtils;
-import com.messerocks.crystal.utils.HumanSwap;
+import com.messerocks.crystal.utils.ClickGate;
+import com.messerocks.crystal.utils.LegitPlace;
 import com.messerocks.crystal.utils.TurnProgress;
 import com.messerocks.crystal.utils.VanillaLimits;
+import meteordevelopment.meteorclient.MeteorClient;
 import meteordevelopment.meteorclient.events.world.TickEvent.Pre;
 import meteordevelopment.meteorclient.settings.Setting;
 import meteordevelopment.meteorclient.settings.SettingGroup;
 import meteordevelopment.meteorclient.settings.BoolSetting.Builder;
 import meteordevelopment.meteorclient.systems.modules.Modules;
 import meteordevelopment.orbit.EventHandler;
-import meteordevelopment.orbit.EventPriority;
+import net.minecraft.class_10185;
 import net.minecraft.class_1297;
+import net.minecraft.class_1799;
 import net.minecraft.class_2338;
+import net.minecraft.class_238;
 import net.minecraft.class_243;
+import net.minecraft.class_310;
+import net.minecraft.class_490;
+import net.minecraft.class_9334;
 
 public class Stealth extends CrystalModule {
    private final SettingGroup sgLimits = this.settings.getDefaultGroup();
    private final SettingGroup sgPacing = this.settings.createGroup("Pacing");
-   private final SettingGroup sgHuman = this.settings.createGroup("Human");
-   private final Setting<Boolean> serverReach = this.sgLimits
-      .add(
-         ((Builder)((Builder)((Builder)new Builder().name("server-reach"))
-                  .description("Use the reach the server actually allows, read from your interaction-range attributes. Anything beyond it is refused anyway."))
-               .defaultValue(true))
-            .build()
-      );
-   private final Setting<Boolean> lineOfSight = this.sgLimits
-      .add(
-         ((Builder)((Builder)((Builder)new Builder().name("require-line-of-sight"))
-                  .description("Only act on what your eyes can see. Clicking through a wall is not something vanilla can do."))
-               .defaultValue(true))
-            .build()
-      );
    private final Setting<Boolean> legitPlace = this.sgLimits
       .add(
-         ((Builder)((Builder)((Builder)new Builder().name("legit-place"))
+         ((Builder)((Builder)((Builder)new Builder().name("force-rotate"))
                   .description(
-                     "Place against a face your eyes actually reach along the rotation you send, instead of always the block's top centre. This is the single thing that makes placing work behind Grim and Vulcan: a prediction anticheat reproduces your raycast and drops anything that does not line up. Costs a few spots you could reach through a corner, which those servers refuse anyway."
+                     "Turn onto the face or hitbox being clicked, whatever the module's own rotate setting says. Every click is only made where the ray from your eyes along the rotation the server has really lands, either way; off, a module with rotate off waits until your own view gets there."
                   ))
                .defaultValue(true))
             .build()
@@ -48,10 +40,36 @@ public class Stealth extends CrystalModule {
       .add(
          ((meteordevelopment.meteorclient.settings.DoubleSetting.Builder)((meteordevelopment.meteorclient.settings.DoubleSetting.Builder)new meteordevelopment.meteorclient.settings.DoubleSetting.Builder()
                   .name("max-turn-per-tick"))
-               .description("Degrees the head may turn per tick, on the way to a target and on the way back to where you are looking. A mouse cannot jump. 0 disables the cap."))
+               .description(
+                  "Degrees the head may turn per tick at the fastest point of a turn. A mouse cannot jump: 90 is already a very fast flick, which is why it cannot go higher."
+               ))
             .defaultValue(45.0)
-            .min(0.0)
-            .sliderMax(180.0)
+            .range(5.0, 90.0)
+            .sliderRange(5.0, 90.0)
+            .build()
+      );
+   private final Setting<Double> viewAngle = this.sgLimits
+      .add(
+         ((meteordevelopment.meteorclient.settings.DoubleSetting.Builder)((meteordevelopment.meteorclient.settings.DoubleSetting.Builder)new meteordevelopment.meteorclient.settings.DoubleSetting.Builder()
+                  .name("view-angle"))
+               .description(
+                  "Only act on what lies within this many degrees of where you are looking. 90 is everything in front of you; anything further means turning around for it, which a module does not do for you."
+               ))
+            .defaultValue(90.0)
+            .range(45.0, 120.0)
+            .sliderRange(45.0, 120.0)
+            .build()
+      );
+   private final Setting<Integer> reaction = this.sgLimits
+      .add(
+         ((meteordevelopment.meteorclient.settings.IntSetting.Builder)((meteordevelopment.meteorclient.settings.IntSetting.Builder)((meteordevelopment.meteorclient.settings.IntSetting.Builder)new meteordevelopment.meteorclient.settings.IntSetting.Builder()
+                     .name("reaction-time"))
+                  .description(
+                     "Ticks between something happening - a pop, a crystal appearing, an enemy raising a shield - and the first action that answers it. People need about 150 ms (3 ticks) at their very best."
+                  ))
+               .defaultValue(4))
+            .range(3, 20)
+            .sliderRange(3, 10)
             .build()
       );
    private final Setting<Double> smoothness = this.sgPacing
@@ -59,33 +77,31 @@ public class Stealth extends CrystalModule {
          ((meteordevelopment.meteorclient.settings.DoubleSetting.Builder)((meteordevelopment.meteorclient.settings.DoubleSetting.Builder)new meteordevelopment.meteorclient.settings.DoubleSetting.Builder()
                   .name("aim-smoothness"))
                .description(
-                  "How much the turn follows a human reaching curve instead of a straight ramp. 0 turns at exactly max-turn-per-tick until it snaps onto the target - inside the limit, but a constant speed no hand produces. 1 accelerates and decelerates like an arm, which takes about 1.9x as long for the same angle."
+                  "How much the turn follows a human reaching curve instead of a straight ramp. Low values turn at nearly constant speed, which no hand produces; 1 accelerates and decelerates like an arm, which takes about 1.9x as long for the same angle."
                ))
             .defaultValue(0.7)
-            .min(0.0)
-            .sliderRange(0.0, 1.0)
+            .range(0.3, 1.0)
+            .sliderRange(0.3, 1.0)
             .build()
       );
    private final Setting<Double> jitter = this.sgPacing
       .add(
          ((meteordevelopment.meteorclient.settings.DoubleSetting.Builder)((meteordevelopment.meteorclient.settings.DoubleSetting.Builder)new meteordevelopment.meteorclient.settings.DoubleSetting.Builder()
                   .name("timing-jitter"))
-               .description("Varies every delay by this fraction. An exact period is information you have no reason to give away."))
+               .description("Varies every delay by this fraction. An exact period is something no hand produces."))
             .defaultValue(0.3)
-            .min(0.0)
-            .sliderMax(1.0)
+            .range(0.1, 1.0)
+            .sliderRange(0.1, 1.0)
             .build()
       );
    private final Setting<Double> globalRate = this.sgPacing
       .add(
          ((meteordevelopment.meteorclient.settings.DoubleSetting.Builder)((meteordevelopment.meteorclient.settings.DoubleSetting.Builder)new meteordevelopment.meteorclient.settings.DoubleSetting.Builder()
                   .name("max-actions-per-second"))
-               .description(
-                  "Ceiling across all modules together. This is the honest lever: no packet is as telling as twenty placements a second, however clean each one looks. 0 removes the ceiling."
-               ))
+               .description("Clicks per second across all modules together. Both hands of a fast player together; it cannot go higher than 20."))
             .defaultValue(12.0)
-            .min(0.0)
-            .sliderMax(40.0)
+            .range(1.0, 20.0)
+            .sliderRange(1.0, 20.0)
             .build()
       );
    private final Setting<Double> skipChance = this.sgPacing
@@ -100,195 +116,208 @@ public class Stealth extends CrystalModule {
             .sliderMax(0.3)
             .build()
       );
-   private final Setting<Boolean> pauseInScreens = this.sgPacing
-      .add(
-         ((Builder)((Builder)((Builder)new Builder().name("pause-in-screens"))
-                  .description("Stop acting while a container or menu is open. Fighting through an open chest is not possible by hand."))
-               .defaultValue(true))
-            .build()
-      );
-   private final Setting<Boolean> humanMode = this.sgHuman
-      .add(
-         ((Builder)((Builder)((Builder)new Builder().name("human-mode"))
-                  .description(
-                     "Auto Crystal, the anchor macro and Sword Place may only do what a hand on a mouse and keyboard can: a hotbar switch that stands for a full tick before the item is used and another tick before switching back (no silent swaps), always looking at what they click, and a reaction time before Auto Crystal acts on anything new. Every Crystal module gets one click per tick between them all and only acts on what is in front of you. Slower, by design."
-                  ))
-               .defaultValue(true))
-            .build()
-      );
-   private final Setting<Integer> reactionTime = this.sgHuman
-      .add(
-         new meteordevelopment.meteorclient.settings.IntSetting.Builder()
-            .name("reaction-time")
-            .description(
-               "Milliseconds before an automatic module acts on something new: a target that walks into range, a crystal that appears, a spot that opens up. Varied by timing-jitter. Spots you keep using are already known and wait for nothing. Key-driven modules are not delayed - the key press is your own reaction."
-            )
-            .defaultValue(150)
-            .min(0)
-            .sliderRange(0, 400)
-            .visible(this.humanMode::get)
-            .build()
-      );
-   private final Setting<Double> viewAngle = this.sgHuman
-      .add(
-         new meteordevelopment.meteorclient.settings.DoubleSetting.Builder()
-            .name("view-angle")
-            .description(
-               "Only act on what lies within this many degrees of where you are looking. 90 is everything in front of you; anything further means turning around for it."
-            )
-            .defaultValue(90.0)
-            .min(10.0)
-            .sliderRange(30.0, 180.0)
-            .visible(this.humanMode::get)
-            .build()
-      );
-   private double budget;
-   private long lastRefill;
-   private int lastClickTick = -1;
+   private static double budget = 1.0;
+   private static long lastRefill = -1L;
+   private static final class_310 mc = class_310.method_1551();
 
    public Stealth() {
-      super(CrystalAddon.CATEGORY, "stealth", "Shared behaviour limits the other Crystal modules obey.");
+      super(CrystalAddon.CATEGORY, "stealth", "Limits every Crystal module obeys. They apply whether this is on or off; the settings tune the human side.");
    }
 
-   public void onActivate() {
-      double rate = (Double)this.globalRate.get();
-      this.budget = rate <= 0.0 ? 0.0 : Math.min(1.0, rate);
-      this.lastRefill = System.nanoTime();
-   }
-
-   @EventHandler
-   private void onTick(Pre event) {
-      long now = System.nanoTime();
-      double elapsed = (now - this.lastRefill) / 1.0E9;
-      this.lastRefill = now;
-      double rate = (Double)this.globalRate.get();
-      if (!(rate <= 0.0)) {
-         this.budget = Math.min(this.budget + elapsed * rate, rate);
-      }
-   }
-
-   @EventHandler(
-      priority = EventPriority.HIGHEST
-   )
-   private void onTickFirst(Pre event) {
-      HumanSwap.observe();
-   }
-
-   @EventHandler(
-      priority = EventPriority.LOWEST
-   )
-   private void onTickLast(Pre event) {
-      TurnProgress.SHARED.easeBack();
-      HumanSwap.tickReturn();
-   }
-
-   private static Stealth get() {
-      Stealth module = (Stealth)Modules.get().get(Stealth.class);
-      return module != null && module.isActive() ? module : null;
+   private static Stealth settings() {
+      return (Stealth)Modules.get().get(Stealth.class);
    }
 
    public static boolean allowsBlock(class_2338 pos, class_243 point) {
-      Stealth stealth = get();
-      if (stealth == null) {
-         return true;
-      } else if (!stealth.inView(point)) {
-         return false;
-      } else {
-         return stealth.serverReach.get() && !VanillaLimits.canReachBlock(pos)
-            ? false
-            : !(Boolean)stealth.lineOfSight.get() || VanillaLimits.hasLineOfSight(point);
-      }
+      return VanillaLimits.canReachBlock(pos) && inView(point) && VanillaLimits.hasLineOfSight(point);
    }
 
    public static boolean allowsEntity(class_1297 entity) {
-      Stealth stealth = get();
-      if (stealth == null) {
+      return VanillaLimits.canReachEntity(entity) && inView(entity.method_5829()) && canSeeAnyOf(entity);
+   }
+
+   public static double viewAngle() {
+      return (Double)settings().viewAngle.get();
+   }
+
+   public static boolean inView(class_243 point) {
+      return AimUtils.withinCone(point, (Double)settings().viewAngle.get());
+   }
+
+   public static boolean inView(class_238 box) {
+      if (inView(box.method_1005())) {
          return true;
-      } else if (!stealth.inView(entity.method_5829().method_1005())) {
-         return false;
       } else {
-         return stealth.serverReach.get() && !VanillaLimits.canReachEntity(entity)
-            ? false
-            : !(Boolean)stealth.lineOfSight.get() || VanillaLimits.hasLineOfSight(entity.method_33571());
+         for (int i = 0; i < 8; i++) {
+            class_243 corner = new class_243(
+               (i & 1) == 0 ? box.field_1323 : box.field_1320, (i & 2) == 0 ? box.field_1322 : box.field_1325, (i & 4) == 0 ? box.field_1321 : box.field_1324
+            );
+            if (inView(corner)) {
+               return true;
+            }
+         }
+
+         return false;
       }
    }
 
-   private boolean inView(class_243 point) {
-      return !(Boolean)this.humanMode.get() || AimUtils.withinCone(point, (Double)this.viewAngle.get());
-   }
-
-   public static boolean humanMode() {
-      Stealth stealth = get();
-      return stealth != null && (Boolean)stealth.humanMode.get();
-   }
-
-   // The reaction time for one new thing, already varied by timing-jitter. 0 outside human mode.
-   public static long reactionNanos() {
-      Stealth stealth = get();
-      if (stealth != null && (Boolean)stealth.humanMode.get() && (Integer)stealth.reactionTime.get() > 0) {
-         return (long)((Integer)stealth.reactionTime.get() * actionCost() * 1000000.0);
+   private static boolean canSeeAnyOf(class_1297 entity) {
+      if (mc.field_1724 == null) {
+         return false;
+      } else if (VanillaLimits.hasLineOfSight(entity.method_33571())) {
+         return true;
       } else {
-         return 0L;
+         class_238 box = entity.method_5829();
+         class_243 eyes = mc.field_1724.method_33571();
+         double reach = Math.sqrt(box.method_49271(eyes)) + box.method_17939() + box.method_17940() + box.method_17941();
+         return LegitPlace.forEntity(box, reach) != null;
       }
    }
 
    public static double turnCap() {
-      Stealth stealth = get();
-      return stealth == null ? 0.0 : (Double)stealth.maxTurn.get();
+      return (Double)settings().maxTurn.get();
    }
 
    public static boolean legitPlace() {
-      Stealth stealth = get();
-      return stealth != null && (Boolean)stealth.legitPlace.get();
+      return (Boolean)settings().legitPlace.get();
    }
 
    public static double aimSmoothness() {
-      Stealth stealth = get();
-      return stealth == null ? 0.0 : (Double)stealth.smoothness.get();
+      return (Double)settings().smoothness.get();
    }
 
    public static double actionCost() {
-      Stealth stealth = get();
-      if (stealth == null) {
-         return 1.0;
-      } else {
-         double jitter = (Double)stealth.jitter.get();
-         return jitter <= 0.0 ? 1.0 : Math.max(0.1, 1.0 + (Math.random() * 2.0 - 1.0) * Math.min(1.0, jitter));
-      }
+      double jitter = (Double)settings().jitter.get();
+      return Math.max(0.1, 1.0 + (Math.random() * 2.0 - 1.0) * Math.min(1.0, jitter));
    }
 
    public static int pace(int ticks) {
-      Stealth stealth = get();
-      return stealth == null ? ticks : VanillaLimits.jitter(ticks, (Double)stealth.jitter.get());
+      return VanillaLimits.jitter(ticks, (Double)settings().jitter.get());
+   }
+
+   public static int paceAtLeast(int min, int ticks) {
+      return Math.max(min, pace(ticks));
+   }
+
+   public static int reactionTicks() {
+      int base = (Integer)settings().reaction.get();
+      double spread = (Double)settings().jitter.get();
+      return base + (int)Math.round(Math.random() * base * spread);
    }
 
    public static boolean claimAction() {
-      Stealth stealth = get();
-      if (stealth == null) {
-         return true;
-      } else if ((Boolean)stealth.pauseInScreens.get() && stealth.mc.field_1755 != null) {
+      if (!canAct()) {
          return false;
-      } else if ((Boolean)stealth.humanMode.get() && stealth.mc.field_1724 != null && stealth.lastClickTick == stealth.mc.field_1724.field_6012) {
-         return false;
-      } else if (VanillaLimits.roll((Double)stealth.skipChance.get())) {
-         return false;
-      } else if ((Double)stealth.globalRate.get() > 0.0 && stealth.budget < 1.0) {
+      } else if (VanillaLimits.roll((Double)settings().skipChance.get())) {
          return false;
       } else {
-         if ((Double)stealth.globalRate.get() > 0.0) {
-            stealth.budget--;
-         }
-
-         if ((Boolean)stealth.humanMode.get() && stealth.mc.field_1724 != null) {
-            stealth.lastClickTick = stealth.mc.field_1724.field_6012;
-            HumanSwap.used();
-         }
-
+         budget--;
          return true;
       }
    }
 
+   private static boolean canAct() {
+      if (mc.field_1755 != null || mc.method_18506() != null) {
+         return false;
+      } else if (mc.field_1724 == null || mc.field_1724.method_6115() || mc.field_1724.method_29504()) {
+         return false;
+      } else if (mc.field_1724.method_5765()) {
+         return false;
+      } else if (TurnProgress.movementKeysHeld() && TurnProgress.SHARED.holdsMovement()) {
+         return false;
+      } else {
+         return (TurnProgress.ownClickPending() || TurnProgress.cameraRequested() || mc.field_1724.method_6128()) && TurnProgress.SHARED.ownClickMismatched()
+            ? false
+            : budget >= 1.0;
+      }
+   }
+
+   public static boolean canUse() {
+      return mc.field_1761 != null && !mc.field_1761.method_2923() ? ClickGate.canUse() && canAct() : false;
+   }
+
+   private static boolean attackItemHits() {
+      if (mc.field_1724 == null) {
+         return false;
+      } else {
+         class_1799 stack = mc.field_1724.method_6047();
+         return stack.method_57826(class_9334.field_63631) ? false : !mc.field_1724.method_75202(stack, 0);
+      }
+   }
+
+   public static boolean canAttack() {
+      if (mc.field_1761 == null || mc.field_1761.method_2923()) {
+         return false;
+      } else {
+         return !attackItemHits() ? false : ClickGate.canAttack() && canAct();
+      }
+   }
+
+   public static boolean claimUse() {
+      return mc.field_1761 != null && !mc.field_1761.method_2923() ? ClickGate.canUse() && claimAction() : false;
+   }
+
+   public static boolean claimAttack() {
+      if (mc.field_1761 == null || mc.field_1761.method_2923()) {
+         return false;
+      } else {
+         return !attackItemHits() ? false : ClickGate.canAttack() && claimAction();
+      }
+   }
+
+   public static boolean allowsInventoryClick() {
+      if (mc.field_1724 == null) {
+         return false;
+      } else if (mc.field_1755 instanceof class_490) {
+         return true;
+      } else if (mc.field_1755 != null) {
+         return false;
+      } else {
+         class_10185 input = mc.field_1724.field_3913.field_54155;
+         boolean sneakHeld = input.comp_3164() && !(Boolean)mc.field_1690.method_42449().method_41753();
+         return !input.comp_3159()
+            && !input.comp_3160()
+            && !input.comp_3161()
+            && !input.comp_3162()
+            && !input.comp_3163()
+            && !sneakHeld
+            && !mc.field_1724.method_5624()
+            && !mc.field_1724.method_6115();
+      }
+   }
+
+   public static boolean handsBusy() {
+      return mc.field_1724 != null && mc.field_1724.method_6115();
+   }
+
+   public static boolean paused() {
+      return mc.field_1755 != null;
+   }
+
    public String getInfoString() {
-      return this.globalRate.get() <= 0.0 ? "uncapped" : String.format("%.0f/%.0f", this.budget, this.globalRate.get());
+      return String.format("%.0f/%.0f", budget, this.globalRate.get());
+   }
+
+   static {
+      MeteorClient.EVENT_BUS.subscribe(Stealth.Ticker.class);
+      ClickGate.init();
+   }
+
+   private static final class Ticker {
+      @EventHandler
+      private static void onTick(Pre event) {
+         long now = System.nanoTime();
+         double elapsed = Stealth.lastRefill < 0L ? 0.0 : (now - Stealth.lastRefill) / 1.0E9;
+         Stealth.lastRefill = now;
+         double rate = (Double)Stealth.settings().globalRate.get();
+         Stealth.budget = Math.min(Stealth.budget + elapsed * rate, Math.max(1.0, rate));
+      }
+
+      @EventHandler(
+         priority = -200
+      )
+      private static void onTickLate(Pre event) {
+         TurnProgress.SHARED.easeBack();
+      }
    }
 }

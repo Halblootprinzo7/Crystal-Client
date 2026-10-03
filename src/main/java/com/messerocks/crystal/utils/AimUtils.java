@@ -4,6 +4,7 @@ import meteordevelopment.meteorclient.utils.player.Rotations;
 import net.minecraft.class_2338;
 import net.minecraft.class_243;
 import net.minecraft.class_310;
+import net.minecraft.class_3532;
 import net.minecraft.class_3959;
 import net.minecraft.class_3965;
 import net.minecraft.class_239.class_240;
@@ -37,7 +38,7 @@ public final class AimUtils {
          double verticalFov = ((Integer)mc.field_1690.method_41808().method_41753()).intValue();
          double aspect = (double)mc.method_22683().method_4489() / Math.max(1, mc.method_22683().method_4506());
          double horizontalFov = Math.toDegrees(2.0 * Math.atan(Math.tan(Math.toRadians(verticalFov) / 2.0) * aspect));
-         double deltaYaw = Math.abs(Rotations.getYaw(pos) - mc.field_1724.method_36454());
+         double deltaYaw = Math.abs(class_3532.method_15338(Rotations.getYaw(pos) - mc.field_1724.method_36454()));
          double deltaPitch = Math.abs(Rotations.getPitch(pos) - mc.field_1724.method_36455());
          return deltaYaw <= horizontalFov / 2.0 - margin && deltaPitch <= verticalFov / 2.0 - margin;
       } else {

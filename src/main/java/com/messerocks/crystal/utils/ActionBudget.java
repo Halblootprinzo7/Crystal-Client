@@ -1,5 +1,7 @@
 package com.messerocks.crystal.utils;
 
+import java.util.function.LongSupplier;
+
 public final class ActionBudget {
    private static final double MAX_ACTION_COST = 2.0;
    private double budget;
@@ -7,12 +9,21 @@ public final class ActionBudget {
    private int maxPerTick = 1;
    private int takenThisTick;
    private long lastUpdate = -1L;
+   private final LongSupplier clock;
+
+   public ActionBudget() {
+      this(System::nanoTime);
+   }
+
+   ActionBudget(LongSupplier clock) {
+      this.clock = clock;
+   }
 
    public void update(double speed, int maxPerTick) {
       this.maxPerTick = Math.max(1, maxPerTick);
       this.capacity = this.maxPerTick * 2.0;
       this.takenThisTick = 0;
-      long now = System.nanoTime();
+      long now = this.clock.getAsLong();
       if (this.lastUpdate < 0L) {
          this.lastUpdate = now;
          this.budget = this.capacity;

@@ -20,7 +20,10 @@ import com.messerocks.crystal.modules.SuicidePrevent;
 import com.messerocks.crystal.modules.SwordPlace;
 import com.messerocks.crystal.modules.TargetInfo;
 import com.messerocks.crystal.modules.TierSpoof;
+import com.messerocks.crystal.utils.RevivedPlayers;
+import com.messerocks.crystal.utils.TurnProgress;
 import com.mojang.logging.LogUtils;
+import meteordevelopment.meteorclient.MeteorClient;
 import meteordevelopment.meteorclient.addons.MeteorAddon;
 import meteordevelopment.meteorclient.systems.hud.Hud;
 import meteordevelopment.meteorclient.systems.hud.HudGroup;
@@ -57,6 +60,8 @@ public class CrystalAddon extends MeteorAddon {
       register(new SchematicBuilder());
       register(new TierSpoof());
       Hud.get().register(CrystalInfoHud.INFO);
+      RevivedPlayers.init();
+      MeteorClient.EVENT_BUS.subscribe(TurnProgress.SHARED);
    }
 
    private static void register(Module module) {

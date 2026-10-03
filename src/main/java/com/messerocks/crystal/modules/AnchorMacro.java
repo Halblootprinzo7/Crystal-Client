@@ -6,13 +6,21 @@ import com.messerocks.crystal.utils.ActionBudget;
 import com.messerocks.crystal.utils.AimUtils;
 import com.messerocks.crystal.utils.AnchorActions;
 import com.messerocks.crystal.utils.BlastShield;
-import com.messerocks.crystal.utils.HumanSwap;
+import com.messerocks.crystal.utils.ClickGate;
+import com.messerocks.crystal.utils.HotbarSwap;
+import com.messerocks.crystal.utils.InventoryGuard;
 import com.messerocks.crystal.utils.LegitPlace;
+import com.messerocks.crystal.utils.TurnProgress;
+import com.messerocks.crystal.utils.VanillaClick;
 import com.messerocks.crystal.utils.VanillaLimits;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Objects;
+import java.util.Set;
 import java.util.function.BooleanSupplier;
+import meteordevelopment.meteorclient.events.packets.PacketEvent.Sent;
 import meteordevelopment.meteorclient.events.render.Render3DEvent;
 import meteordevelopment.meteorclient.events.world.TickEvent.Pre;
 import meteordevelopment.meteorclient.renderer.ShapeMode;
@@ -21,9 +29,7 @@ import meteordevelopment.meteorclient.settings.SettingGroup;
 import meteordevelopment.meteorclient.settings.KeybindSetting.Builder;
 import meteordevelopment.meteorclient.utils.entity.EntityUtils;
 import meteordevelopment.meteorclient.utils.entity.SortPriority;
-import meteordevelopment.meteorclient.utils.entity.TargetUtils;
 import meteordevelopment.meteorclient.utils.misc.Keybind;
-import meteordevelopment.meteorclient.utils.player.FindItemResult;
 import meteordevelopment.meteorclient.utils.player.InvUtils;
 import meteordevelopment.meteorclient.utils.render.color.Color;
 import meteordevelopment.meteorclient.utils.render.color.SettingColor;
@@ -40,11 +46,13 @@ import net.minecraft.class_2246;
 import net.minecraft.class_2248;
 import net.minecraft.class_2338;
 import net.minecraft.class_2350;
+import net.minecraft.class_238;
 import net.minecraft.class_243;
 import net.minecraft.class_2680;
 import net.minecraft.class_3532;
 import net.minecraft.class_3965;
 import net.minecraft.class_640;
+import net.minecraft.class_2338.class_2339;
 
 public class AnchorMacro extends CrystalModule {
    private final SettingGroup sgGeneral = this.settings.getDefaultGroup();
@@ -75,23 +83,13 @@ public class AnchorMacro extends CrystalModule {
       .add(
          ((meteordevelopment.meteorclient.settings.DoubleSetting.Builder)((meteordevelopment.meteorclient.settings.DoubleSetting.Builder)((meteordevelopment.meteorclient.settings.DoubleSetting.Builder)new meteordevelopment.meteorclient.settings.DoubleSetting.Builder()
                      .name("cycles-per-second"))
-                  .description("Rate limit while the key is held. 0 runs a cycle every tick."))
-               .defaultValue(0.0)
-               .min(0.0)
-               .sliderMax(20.0)
-               .visible(() -> this.trigger.get() == AnchorMacro.Trigger.Hold))
-            .build()
-      );
-   private final Setting<Integer> actionsPerTick = this.sgGeneral
-      .add(
-         ((meteordevelopment.meteorclient.settings.IntSetting.Builder)((meteordevelopment.meteorclient.settings.IntSetting.Builder)((meteordevelopment.meteorclient.settings.IntSetting.Builder)new meteordevelopment.meteorclient.settings.IntSetting.Builder()
-                     .name("actions-per-tick"))
                   .description(
-                     "How many steps of the cycle may go out in one tick. 1 keeps every click on its own rotation, which is what an anticheat needs. Raising it collapses place, charge and detonate together - fast, but a single rotation cannot serve three different clicks."
+                     "How many cycles may start per second while the key is held, at an irregular spacing. A cycle is three or four clicks at least two ticks apart, so about two a second is already quick."
                   ))
-               .defaultValue(1))
-            .min(1)
-            .sliderRange(1, 4)
+               .defaultValue(3.0)
+               .range(0.1, 20.0)
+               .sliderRange(0.1, 5.0)
+               .visible(() -> this.trigger.get() == AnchorMacro.Trigger.Hold))
             .build()
       );
    private final Setting<Integer> predictionTicks = this.sgGeneral
@@ -111,11 +109,11 @@ public class AnchorMacro extends CrystalModule {
          ((meteordevelopment.meteorclient.settings.DoubleSetting.Builder)((meteordevelopment.meteorclient.settings.DoubleSetting.Builder)new meteordevelopment.meteorclient.settings.DoubleSetting.Builder()
                   .name("speed"))
                .description(
-                  "Actions per second across the whole cycle - placing, charging, shielding and detonating all draw from this. 0 is unlimited, which is also the most obviously non-human thing the module can do. Applies to a single press too, not just a held key."
+                  "Clicks per second across the whole cycle - placing, charging, shielding and detonating all draw from this, at an irregular spacing. Applies to a single press too, not just a held key. Two clicks of the macro are at least two ticks apart regardless."
                ))
             .defaultValue(8.0)
-            .min(0.0)
-            .sliderMax(40.0)
+            .range(1.0, 20.0)
+            .sliderRange(1.0, 20.0)
             .build()
       );
    private final Setting<Double> placeSpeed = this.sgGeneral
@@ -123,21 +121,21 @@ public class AnchorMacro extends CrystalModule {
          ((meteordevelopment.meteorclient.settings.DoubleSetting.Builder)((meteordevelopment.meteorclient.settings.DoubleSetting.Builder)new meteordevelopment.meteorclient.settings.DoubleSetting.Builder()
                   .name("place-speed"))
                .description(
-                  "Anchor placements per second. 0 is unlimited. Kept apart from explode-speed because the two want different rates - placing is cheap, detonating is what hurts you."
+                  "Anchor placements per second, on top of speed - the lower of the two applies. Kept apart from explode-speed because the two want different rates - placing is cheap, detonating is what hurts you."
                ))
-            .defaultValue(0.0)
-            .min(0.0)
-            .sliderMax(20.0)
+            .defaultValue(20.0)
+            .range(0.5, 20.0)
+            .sliderRange(0.5, 20.0)
             .build()
       );
    private final Setting<Double> explodeSpeed = this.sgGeneral
       .add(
          ((meteordevelopment.meteorclient.settings.DoubleSetting.Builder)((meteordevelopment.meteorclient.settings.DoubleSetting.Builder)new meteordevelopment.meteorclient.settings.DoubleSetting.Builder()
                   .name("explode-speed"))
-               .description("Detonations per second. 0 is unlimited."))
-            .defaultValue(0.0)
-            .min(0.0)
-            .sliderMax(20.0)
+               .description("Detonations per second, on top of speed - the lower of the two applies."))
+            .defaultValue(20.0)
+            .range(0.5, 20.0)
+            .sliderRange(0.5, 20.0)
             .build()
       );
    private final Setting<Boolean> requireFov = this.sgGeneral
@@ -163,7 +161,7 @@ public class AnchorMacro extends CrystalModule {
       .add(
          ((meteordevelopment.meteorclient.settings.DoubleSetting.Builder)((meteordevelopment.meteorclient.settings.DoubleSetting.Builder)new meteordevelopment.meteorclient.settings.DoubleSetting.Builder()
                   .name("range"))
-               .description("Maximum distance."))
+               .description("Maximum distance. Never further than the server's block interaction range, whatever this says."))
             .defaultValue(4.5)
             .min(0.0)
             .sliderMax(6.0)
@@ -174,9 +172,9 @@ public class AnchorMacro extends CrystalModule {
          ((meteordevelopment.meteorclient.settings.BoolSetting.Builder)((meteordevelopment.meteorclient.settings.BoolSetting.Builder)((meteordevelopment.meteorclient.settings.BoolSetting.Builder)new meteordevelopment.meteorclient.settings.BoolSetting.Builder()
                      .name("rotate"))
                   .description(
-                     "Face the anchor before clicking. Forced on anyway while Stealth's legit-place is enabled - the hit point only matches the click if the server has the rotation it was computed for."
+                     "Turn onto each face before clicking it. Off, a step only goes out when the rotation the server already has lands on the right face - in Crosshair mode that is the spot you point at, but the glowstone shield and, after you move, the anchor itself are often out of it. Forced on while Stealth's force-rotate is on."
                   ))
-               .defaultValue(false))
+               .defaultValue(true))
             .build()
       );
    private final Setting<Boolean> swing = this.sgGeneral
@@ -192,7 +190,7 @@ public class AnchorMacro extends CrystalModule {
          ((meteordevelopment.meteorclient.settings.IntSetting.Builder)((meteordevelopment.meteorclient.settings.IntSetting.Builder)((meteordevelopment.meteorclient.settings.IntSetting.Builder)new meteordevelopment.meteorclient.settings.IntSetting.Builder()
                      .name("cycle-timeout"))
                   .description(
-                     "Ticks a cycle may run before it is given up on. The state machine retries by itself when the server refuses a step - it simply sees the spot is still empty next tick - so this only catches a spot that can never work."
+                     "Ticks a cycle may run before it is given up on. Ticks spent waiting for speed, place-speed or explode-speed, for a reaction time, for you to stop walking, for you to look back at a spot you turned away from, or for a hotbar slot to stand its tick before the click do not count - the last three have a limit of the same length of their own. The state machine retries by itself when the server refuses a step - it simply sees the spot is still empty next tick - so this only catches a spot that can never work."
                   ))
                .defaultValue(20))
             .min(1)
@@ -203,7 +201,9 @@ public class AnchorMacro extends CrystalModule {
       .add(
          ((meteordevelopment.meteorclient.settings.BoolSetting.Builder)((meteordevelopment.meteorclient.settings.BoolSetting.Builder)((meteordevelopment.meteorclient.settings.BoolSetting.Builder)new meteordevelopment.meteorclient.settings.BoolSetting.Builder()
                      .name("auto-refill"))
-                  .description("Pull anchors and glowstone from your inventory into a free hotbar slot."))
+                  .description(
+                     "Pull anchors and glowstone from your inventory into a free hotbar slot - one swap click, only while you stand still and once a hand could have opened the inventory and pointed at the stack, with a pause before the next click."
+                  ))
                .defaultValue(true))
             .build()
       );
@@ -227,7 +227,9 @@ public class AnchorMacro extends CrystalModule {
       .add(
          ((meteordevelopment.meteorclient.settings.EnumSetting.Builder)((meteordevelopment.meteorclient.settings.EnumSetting.Builder)((meteordevelopment.meteorclient.settings.EnumSetting.Builder)new meteordevelopment.meteorclient.settings.EnumSetting.Builder()
                      .name("switch-mode"))
-                  .description("Hotbar really moves your selection onto anchor and glowstone, the way you would yourself. Silent swaps back within the tick."))
+                  .description(
+                     "Hotbar really moves your selection onto anchor and glowstone, the way you would yourself - the number key a tick before the click, while the head still turns or the pace runs out, since a slot has to stand a tick before it clicks. Silent goes back to your slot once a few ticks have passed without a click; its click comes a tick after the switch."
+                  ))
                .defaultValue(AnchorMacro.SwitchMode.Hotbar))
             .build()
       );
@@ -235,7 +237,9 @@ public class AnchorMacro extends CrystalModule {
       .add(
          ((meteordevelopment.meteorclient.settings.BoolSetting.Builder)((meteordevelopment.meteorclient.settings.BoolSetting.Builder)((meteordevelopment.meteorclient.settings.BoolSetting.Builder)((meteordevelopment.meteorclient.settings.BoolSetting.Builder)new meteordevelopment.meteorclient.settings.BoolSetting.Builder()
                         .name("restore-slot"))
-                     .description("Go back to the slot you started on once the cycle is done."))
+                     .description(
+                        "Go back to the slot you started on once the cycle is done and the key is let go - a tick or two after the last click, never in the same tick. A slot you picked yourself in between stays."
+                     ))
                   .defaultValue(true))
                .visible(() -> this.switchMode.get() == AnchorMacro.SwitchMode.Hotbar))
             .build()
@@ -280,7 +284,9 @@ public class AnchorMacro extends CrystalModule {
       .add(
          ((meteordevelopment.meteorclient.settings.DoubleSetting.Builder)((meteordevelopment.meteorclient.settings.DoubleSetting.Builder)((meteordevelopment.meteorclient.settings.DoubleSetting.Builder)new meteordevelopment.meteorclient.settings.DoubleSetting.Builder()
                      .name("skip-shield-below"))
-                  .description("Do not bother shielding when the unshielded blast would already deal less than this to you."))
+                  .description(
+                     "Do not bother shielding when the unshielded blast would already deal less than this to you - unless even that little would break damage-limit, keep-health in particular."
+                  ))
                .defaultValue(2.0)
                .min(0.0)
                .sliderMax(10.0)
@@ -394,93 +400,180 @@ public class AnchorMacro extends CrystalModule {
                .visible(this.render::get))
             .build()
       );
-   // Above the auras (50): a key press takes the shared head rotation over instead of waiting for Auto Crystal to let go.
-   private static final int MACRO_ROTATION_PRIORITY = 100;
-   private static final int SWAP_PRIORITY = 100;
+   private static final int MACRO_ROTATION_PRIORITY = 90;
    private final ActionBudget budget = new ActionBudget();
    private final ActionBudget speedLimit = new ActionBudget();
    private final ActionBudget placeLimit = new ActionBudget();
    private final ActionBudget explodeLimit = new ActionBudget();
+   private final AnchorActions.Sightings sightings = new AnchorActions.Sightings();
+   private final AnchorActions.Refill refill = new AnchorActions.Refill();
+   private int ticks;
+   private int nextClickTick;
+   private AnchorMacro.Blast blastShown;
+   private boolean spotWaitsOnSight;
+   private boolean restorePending;
+   private int restoreAt;
+   private int cycleSlot = -1;
    private class_2338 working;
    private AnchorMacro.AnchorState predicted;
    private int cycleTicks;
+   private int cameraTicks;
+   private int sightTicks;
+   private int slotTicks;
+   private boolean countedTick;
+   private double nextCost = Double.NaN;
+   private double nextCycleCost = Double.NaN;
    private int predictedAge;
    private boolean wasPressed;
    private boolean shieldKeyWasPressed;
    private int returnSlot = -1;
    private String lastShieldProblem;
+   private static final String HIDES_ANCHOR = "a shield there would hide every face of the anchor you could still click to set it off";
    private float lastShieldGain;
    private boolean lastShieldDiagonal;
    private class_2338 shieldAssumed;
    private boolean shieldDone;
    private String lastRejection;
    private class_2338 shieldPlaced;
+   private boolean sneakWarned;
+   private boolean viewWarned;
+   private class_2338 detonatedAt;
+   private int detonatedAge;
+   private boolean spotWaitsOnBlast;
+   private boolean pressQueued;
+   private final Set<String> heldWarnings = new HashSet<>();
 
    public AnchorMacro() {
       super(CrystalAddon.CATEGORY, "crystal-anchor-macro", "Runs one full anchor cycle on a keypress.");
    }
 
    public void onDeactivate() {
-      this.restore();
-      this.shieldPlaced = null;
-      this.clearShield();
-      this.budget.reset();
-      this.wasPressed = false;
-   }
+      this.finish();
+      if (this.restorePending
+         && this.mc.field_1724 != null
+         && this.returnSlot != -1
+         && this.cycleSlot != -1
+         && this.switchMode.get() == AnchorMacro.SwitchMode.Hotbar
+         && (Boolean)this.restoreSlot.get()
+         && HotbarSwap.stillOn(this.cycleSlot)) {
+         HotbarSwap.selectLater(this.returnSlot, this.cycleSlot, Stealth.reactionTicks());
+      }
 
-   private void clearShield() {
-      this.shieldAssumed = null;
-      this.restore();
-      this.shieldPlaced = null;
+      this.restorePending = false;
+      this.returnSlot = -1;
+      this.cycleSlot = -1;
+      this.sightings.clear();
+      this.refill.reset();
+      this.blastShown = null;
+      this.spotWaitsOnSight = false;
+      this.budget.reset();
+      this.speedLimit.reset();
+      this.placeLimit.reset();
+      this.explodeLimit.reset();
+      this.wasPressed = false;
+      this.shieldKeyWasPressed = false;
+      this.detonatedAt = null;
+      this.detonatedAge = 0;
+      this.pressQueued = false;
+      this.heldWarnings.clear();
    }
 
    @EventHandler
    private void onTick(Pre event) {
-      if (this.mc.field_1724 != null && this.mc.field_1687 != null && this.mc.field_1761 != null) {
-         if (this.mc.field_1755 != null) {
-            this.wasPressed = false;
-            this.shieldKeyWasPressed = false;
-         } else {
-            boolean pressed = ((Keybind)this.bind.get()).isPressed();
-            boolean justPressed = pressed && !this.wasPressed;
-            this.wasPressed = pressed;
-            boolean shieldKeyPressed = ((Keybind)this.shieldBind.get()).isSet() && ((Keybind)this.shieldBind.get()).isPressed();
-            if (shieldKeyPressed && !this.shieldKeyWasPressed) {
-               this.shield.set(!(Boolean)this.shield.get());
+      if (this.isActive()) {
+         if (this.mc.field_1724 != null && this.mc.field_1687 != null && this.mc.field_1761 != null) {
+            if (this.sessionChanged()) {
+               this.returnSlot = -1;
+               this.onDeactivate();
             }
 
-            this.shieldKeyWasPressed = shieldKeyPressed;
-            if ((Boolean)this.autoRefill.get() && (pressed || this.working != null) && !AnchorActions.refillHotbar(class_1802.field_23141)) {
-               AnchorActions.refillHotbar(class_1802.field_8801);
+            this.ticks++;
+            this.sightings.tick();
+            if (this.detonatedAt != null && (AnchorActions.charges(this.detonatedAt) <= 0 || ++this.detonatedAge > this.predictionWindow())) {
+               this.blastShown = new AnchorMacro.Blast(this.detonatedAt, this.ticks);
+               this.detonatedAt = null;
+               this.detonatedAge = 0;
             }
 
-            this.budget.update((Double)this.cyclesPerSecond.get(), 1);
-            this.speedLimit.update((Double)this.speed.get(), 1);
-            this.placeLimit.update((Double)this.placeSpeed.get(), 1);
-            this.explodeLimit.update((Double)this.explodeSpeed.get(), 1);
-            if (this.working != null) {
-               this.runAt(this.working);
+            if (this.blastShown != null && this.sightings.reacted(this.blastShown)) {
+               this.blastShown = null;
+            }
+
+            this.noteAnchors();
+            if (this.mc.field_1755 != null) {
+               this.wasPressed = false;
+               this.shieldKeyWasPressed = false;
+               this.pressQueued = false;
+               this.heldWarnings.clear();
             } else {
-               boolean start = this.trigger.get() == AnchorMacro.Trigger.Hold ? pressed : justPressed;
-               if (start) {
-                  if (this.trigger.get() != AnchorMacro.Trigger.Hold || !((Double)this.cyclesPerSecond.get() > 0.0) || this.budget.tryConsume()) {
-                     if ((Boolean)this.netherGuard.get() && this.mc.field_1687.method_27983() == class_1937.field_25180) {
+               boolean pressed = ((Keybind)this.bind.get()).isPressed();
+               boolean justPressed = pressed && !this.wasPressed;
+               this.wasPressed = pressed;
+               if (!pressed) {
+                  this.heldWarnings.clear();
+               }
+
+               boolean shieldKeyPressed = ((Keybind)this.shieldBind.get()).isSet() && ((Keybind)this.shieldBind.get()).isPressed();
+               if (shieldKeyPressed && !this.shieldKeyWasPressed) {
+                  this.shield.set(!(Boolean)this.shield.get());
+               }
+
+               this.shieldKeyWasPressed = shieldKeyPressed;
+               if ((Boolean)this.autoRefill.get() && (pressed || this.working != null)) {
+                  this.refill.tick(class_1802.field_23141, class_1802.field_8801);
+               }
+
+               this.budget.update((Double)this.cyclesPerSecond.get(), 1);
+               this.speedLimit.update((Double)this.speed.get(), 1);
+               this.placeLimit.update((Double)this.placeSpeed.get(), 1);
+               this.explodeLimit.update((Double)this.explodeSpeed.get(), 1);
+               if (this.working != null) {
+                  this.runAt(this.working);
+               } else {
+                  boolean start = this.trigger.get() == AnchorMacro.Trigger.Hold ? pressed : justPressed || this.pressQueued;
+                  this.pressQueued = false;
+                  if (!start && !pressed) {
+                     this.restoreIfDue(false);
+                  }
+
+                  if (start) {
+                     if (this.blastShown != null) {
+                        this.pressQueued = this.trigger.get() == AnchorMacro.Trigger.Press;
+                        if (this.mode.get() == AnchorMacro.Mode.BestDamage) {
+                           this.findSpot();
+                        }
+                     } else if ((Boolean)this.netherGuard.get() && this.mc.field_1687.method_27983() == class_1937.field_25180) {
                         if ((Boolean)this.chatInfo.get()) {
-                           this.warning("In the Nether an anchor sets your spawn instead of exploding.", new Object[0]);
+                           this.report("In the Nether an anchor sets your spawn instead of exploding.");
                         }
                      } else {
                         class_2338 spot = this.findSpot();
                         if (spot != null) {
+                           if (this.trigger.get() == AnchorMacro.Trigger.Hold) {
+                              if (Double.isNaN(this.nextCycleCost)) {
+                                 this.nextCycleCost = Stealth.actionCost();
+                              }
+
+                              if (!this.budget.tryConsume(this.nextCycleCost)) {
+                                 return;
+                              }
+
+                              this.nextCycleCost = Double.NaN;
+                           }
+
                            if ((Boolean)this.debug.get()) {
                               this.info("Spot: %s", new Object[]{AnchorActions.describe(spot)});
                            }
 
                            this.rememberSlot();
+                           this.restorePending = false;
                            this.startCycle(spot);
-                        } else {
+                        } else if (!this.spotWaitsOnBlast && !this.spotWaitsOnSight) {
                            if ((Boolean)this.chatInfo.get() || (Boolean)this.debug.get()) {
-                              this.warning("No usable anchor spot. %s", new Object[]{this.spotHint()});
+                              this.report("No usable anchor spot. %s", this.spotHint());
                            }
+                        } else {
+                           this.pressQueued = this.trigger.get() == AnchorMacro.Trigger.Press;
                         }
                      }
                   }
@@ -494,29 +587,56 @@ public class AnchorMacro extends CrystalModule {
       return pos.method_10263() + " " + pos.method_10264() + " " + pos.method_10260();
    }
 
-   private void rememberSlot() {
-      if (this.returnSlot == -1) {
-         this.returnSlot = this.mc.field_1724.method_31548().method_67532();
+   private void report(String message, Object... args) {
+      if (this.trigger.get() != AnchorMacro.Trigger.Hold || !this.wasPressed || this.heldWarnings.add(message)) {
+         this.warning(message, args);
       }
    }
 
-   private void restore() {
-      if (this.returnSlot != -1) {
-         if (this.mc.field_1724 == null) {
+   private void rememberSlot() {
+      if (this.returnSlot == -1) {
+         this.returnSlot = HotbarSwap.homeSlot();
+         this.cycleSlot = -1;
+      }
+   }
+
+   private void restoreIfDue(boolean now) {
+      if (this.restorePending && (now || this.ticks >= this.restoreAt)) {
+         boolean mine = this.mc.field_1724 != null && this.returnSlot != -1 && this.cycleSlot != -1 && HotbarSwap.homeSlot() == this.cycleSlot;
+         if (!mine
+            || this.switchMode.get() != AnchorMacro.SwitchMode.Hotbar
+            || !(Boolean)this.restoreSlot.get()
+            || this.returnSlot == this.cycleSlot
+            || HotbarSwap.select(this.returnSlot)
+            || now) {
+            this.restorePending = false;
             this.returnSlot = -1;
-         } else {
-            if (this.visibleSwaps()
-               && (Boolean)this.restoreSlot.get()
-               && this.returnSlot != this.mc.field_1724.method_31548().method_67532()) {
-               if (Stealth.humanMode()) {
-                  HumanSwap.returnLater(this.returnSlot);
-               } else {
-                  InvUtils.swap(this.returnSlot, false);
+            this.cycleSlot = -1;
+         }
+      }
+   }
+
+   private void noteAnchors() {
+      class_2338 origin = this.mc.field_1724.method_24515();
+      int radius = (int)Math.ceil(this.reach());
+      class_2339 pos = new class_2339();
+
+      for (int x = -radius; x <= radius; x++) {
+         for (int y = -radius; y <= radius; y++) {
+            for (int z = -radius; z <= radius; z++) {
+               pos.method_25504(origin, x, y, z);
+               if (AnchorActions.charges(pos) >= 0) {
+                  this.sightings.ready(pos);
                }
             }
-
-            this.returnSlot = -1;
          }
+      }
+   }
+
+   @EventHandler
+   private void onSent(Sent event) {
+      if (this.mc.method_18854()) {
+         this.sightings.onSent(event.packet);
       }
    }
 
@@ -562,13 +682,18 @@ public class AnchorMacro extends CrystalModule {
 
    private void startCycle(class_2338 spot) {
       this.shieldDone = false;
+      this.sneakWarned = false;
+      this.viewWarned = false;
       this.shieldAssumed = null;
       this.shieldPlaced = null;
       this.working = spot;
       this.predicted = null;
       this.predictedAge = 0;
       this.cycleTicks = 0;
-      AnchorActions.resetTurn();
+      this.cameraTicks = 0;
+      this.sightTicks = 0;
+      this.slotTicks = 0;
+      AnchorActions.resetTurn(this);
       this.runAt(spot);
    }
 
@@ -599,158 +724,241 @@ public class AnchorMacro extends CrystalModule {
    }
 
    private void runAt(class_2338 spot) {
-      if (++this.cycleTicks > this.cycleTimeout()) {
-         if ((Boolean)this.chatInfo.get() || (Boolean)this.debug.get()) {
-            this.warning("Gave up on the spot after %d ticks.", new Object[]{this.cycleTimeout()});
+      int before = this.mc.field_1724.method_31548().method_67532();
+      this.advanceAt(spot);
+      int after = this.mc.field_1724.method_31548().method_67532();
+      if (after != before) {
+         this.cycleSlot = after;
+      }
+
+      if (this.working != null && ClickGate.slotChangedThisTick()) {
+         if (this.countedTick) {
+            this.cycleTicks--;
          }
 
-         this.finish();
+         this.countedTick = false;
+         if (after != before && (Boolean)this.debug.get()) {
+            this.info("Slot %d selected - the click follows once the slot has stood a tick.", new Object[]{after});
+         }
+
+         if (++this.slotTicks > this.cycleTimeout()) {
+            if ((Boolean)this.chatInfo.get() || (Boolean)this.debug.get()) {
+               this.report("Gave up on the spot: the hotbar slot kept changing - a slot has to stand a tick before anything is clicked with it.");
+            }
+
+            this.finish();
+         }
+      }
+   }
+
+   private void advanceAt(class_2338 spot) {
+      this.countedTick = false;
+      boolean unnoticed = AnchorActions.charges(spot) >= 0 && !this.sightings.noticed(spot);
+      boolean offhandBusy = InventoryGuard.offhandInFlight();
+      boolean outOfSight = !Stealth.inView(new class_238(spot));
+      if (this.mustRotate() && TurnProgress.cameraNeeded()) {
+         if (++this.cameraTicks > this.cycleTimeout()) {
+            if ((Boolean)this.chatInfo.get() || (Boolean)this.debug.get()) {
+               this.report(
+                  "Gave up on the spot: while you walk, glide or click yourself - or a module clicks along your crosshair - the macro does not turn on its own and only clicks what your view lands on."
+               );
+            }
+
+            this.finish();
+            return;
+         }
+      } else if (outOfSight) {
+         if (++this.sightTicks > this.cycleTimeout()) {
+            if ((Boolean)this.chatInfo.get() || (Boolean)this.debug.get()) {
+               this.report(
+                  "Gave up on the spot at %s: it is out of sight - outside Stealth's view-angle, and the macro does not turn round for it.", format(spot)
+               );
+            }
+
+            this.finish();
+            return;
+         }
+      } else if (!unnoticed && !offhandBusy && !this.waitingOnRate(this.stateAt(spot))) {
+         this.countedTick = true;
+         if (++this.cycleTicks > this.cycleTimeout()) {
+            if ((Boolean)this.chatInfo.get() || (Boolean)this.debug.get()) {
+               this.report("Gave up on the spot after %d ticks.", this.cycleTimeout());
+            }
+
+            this.finish();
+            return;
+         }
+      }
+
+      if (this.predicted != null) {
+         AnchorMacro.AnchorState real = this.worldStateAt(spot);
+         if (real.ordinal() >= this.predicted.ordinal() || ++this.predictedAge > this.predictionWindow()) {
+            if ((Boolean)this.debug.get() && real.ordinal() < this.predicted.ordinal()) {
+               this.info("Prediction %s never confirmed - back to %s", new Object[]{this.predicted, real});
+            }
+
+            this.predicted = null;
+            this.predictedAge = 0;
+         }
+      }
+
+      if (!unnoticed && !offhandBusy && !outOfSight) {
+         String unsafe = this.unsafeEvenShielded(spot);
+         if (unsafe != null) {
+            if ((Boolean)this.chatInfo.get()) {
+               this.report("Cycle stopped by safe-anchor: %s.", unsafe);
+            }
+
+            this.finish();
+         } else {
+            AnchorMacro.AnchorState state = this.stateAt(spot);
+            int detonator = this.detonationPreference();
+            boolean sneakBlocks = state == AnchorMacro.AnchorState.Anchor
+               ? AnchorActions.sneakBlocksCharge()
+               : state == AnchorMacro.AnchorState.Loaded && AnchorActions.sneakBlocksDetonation(detonator);
+            if (sneakBlocks) {
+               if (!this.sneakWarned && ((Boolean)this.chatInfo.get() || (Boolean)this.debug.get())) {
+                  this.report(
+                     "Let go of sneak - sneaking with an item in hand, the server puts glowstone beside the anchor instead of charging it, and will not set it off."
+                  );
+               }
+
+               this.sneakWarned = true;
+            } else if (state != AnchorMacro.AnchorState.Air && !this.mustRotate() && !AnchorActions.viewLandsOn(spot)) {
+               if (!this.viewWarned && ((Boolean)this.chatInfo.get() || (Boolean)this.debug.get())) {
+                  this.report("Look at the anchor at %s - with rotate off the macro only clicks what your own view lands on.", format(spot));
+               }
+
+               this.viewWarned = true;
+            } else {
+               switch (state) {
+                  case Air:
+                     if (!AnchorActions.findAnchor().found()) {
+                        if ((Boolean)this.chatInfo.get()) {
+                           this.report("No anchor in the hotbar.");
+                        }
+
+                        this.finish();
+                        return;
+                     }
+
+                     if (AnchorActions.placeHit(spot, this.mustRotate()) == null) {
+                        if ((Boolean)this.chatInfo.get() || (Boolean)this.debug.get()) {
+                           this.report(
+                              this.mustRotate()
+                                 ? "Nothing to click that puts an anchor at %s from where you stand."
+                                 : "Your view does not land on anything that puts an anchor at %s - look at it, or turn rotate on.",
+                              format(spot)
+                           );
+                        }
+
+                        this.finish();
+                        return;
+                     }
+
+                     if (!BlockUtils.canPlaceBlock(spot, true, class_2246.field_23152)) {
+                        return;
+                     }
+
+                     AnchorActions.place(spot, this.options(this.placeLimit, () -> {
+                        this.predicted = AnchorMacro.AnchorState.Anchor;
+                        if ((Boolean)this.debug.get()) {
+                           this.info("Placed anchor at %s", new Object[]{format(spot)});
+                        }
+                     }));
+                     break;
+                  case Anchor:
+                     if (AnchorActions.charges(spot) < 0) {
+                        return;
+                     }
+
+                     if (!AnchorActions.findGlowstone().found()) {
+                        if ((Boolean)this.chatInfo.get()) {
+                           this.report(
+                              "No glowstone in the hotbar - glowstone in the offhand cannot charge without the main hand setting a charged anchor off."
+                           );
+                        }
+
+                        this.finish();
+                        return;
+                     }
+
+                     AnchorActions.charge(spot, this.options(null, () -> {
+                        this.predicted = AnchorMacro.AnchorState.Loaded;
+                        if ((Boolean)this.debug.get()) {
+                           this.info("Charged anchor at %s", new Object[]{format(spot)});
+                        }
+                     }));
+                     break;
+                  case Loaded:
+                     int charges = AnchorActions.charges(spot);
+                     if (charges <= 0) {
+                        return;
+                     }
+
+                     if ((Boolean)this.shield.get() && !this.shieldDone) {
+                        AnchorMacro.ShieldStep step = this.placeShieldNow(spot);
+                        if (step == AnchorMacro.ShieldStep.Turning) {
+                           return;
+                        }
+
+                        this.shieldDone = true;
+                        if (step == AnchorMacro.ShieldStep.Placed) {
+                           return;
+                        }
+                     }
+
+                     String blast = this.safetyProblem(spot);
+                     if (blast != null) {
+                        if ((Boolean)this.chatInfo.get()) {
+                           this.report("Cycle stopped by safe-anchor: %s.", blast);
+                        }
+
+                        this.finish();
+                        return;
+                     }
+
+                     if (AnchorActions.offhandBlocksDetonation(charges)) {
+                        if (!AnchorActions.findGlowstone().found()) {
+                           if ((Boolean)this.chatInfo.get()) {
+                              this.report(
+                                 "Glowstone in your offhand keeps the anchor from going off until it is full, and there is none in the hotbar to fill it."
+                              );
+                           }
+
+                           this.finish();
+                           return;
+                        }
+
+                        AnchorActions.charge(spot, this.options(null, () -> {
+                           if ((Boolean)this.debug.get()) {
+                              this.info("Topped up the anchor at %s - glowstone in your offhand", new Object[]{format(spot)});
+                           }
+                        }));
+                        return;
+                     }
+
+                     AnchorActions.detonate(spot, charges, this.options(this.explodeLimit, () -> {
+                        if ((Boolean)this.debug.get()) {
+                           this.info("Detonated at %s", new Object[]{format(spot)});
+                        }
+
+                        this.detonatedAt = spot;
+                        this.detonatedAge = 0;
+                        this.finish();
+                     }), detonator);
+               }
+            }
+         }
+      }
+   }
+
+   private int detonationPreference() {
+      if (this.returnSlot == -1) {
+         return -1;
       } else {
-         if (this.predicted != null) {
-            AnchorMacro.AnchorState real = this.worldStateAt(spot);
-            if (real.ordinal() >= this.predicted.ordinal() || ++this.predictedAge > this.predictionWindow()) {
-               if ((Boolean)this.debug.get() && real.ordinal() < this.predicted.ordinal()) {
-                  this.info("Prediction %s never confirmed - back to %s", new Object[]{this.predicted, real});
-               }
-
-               this.predicted = null;
-               this.predictedAge = 0;
-            }
-         }
-
-         int budgetLeft = (Integer)this.actionsPerTick.get();
-         if (Stealth.turnCap() > 0.0) {
-            budgetLeft = 1;
-         }
-
-         while (budgetLeft-- > 0) {
-            String unsafe = this.safetyProblem(spot);
-            if (unsafe != null && (Boolean)this.shield.get() && !this.shieldDone && this.effectiveShield() == null) {
-               class_2338 rescue = this.shieldSpotFor(spot);
-               if (rescue != null && this.safetyProblem(spot, rescue) == null) {
-                  unsafe = null;
-               }
-            }
-
-            if (unsafe != null) {
-               if ((Boolean)this.chatInfo.get()) {
-                  this.warning("Cycle stopped by safe-anchor: %s.", new Object[]{unsafe});
-               }
-
-               this.finish();
-               return;
-            }
-
-            switch (this.stateAt(spot)) {
-               case Air:
-                  if (!InvUtils.findInHotbar(new class_1792[]{class_1802.field_23141}).found()) {
-                     if ((Boolean)this.chatInfo.get()) {
-                        this.warning("No anchor in the hotbar.", new Object[0]);
-                     }
-
-                     this.finish();
-                     return;
-                  }
-
-                  if (AnchorActions.placeHit(spot) == null) {
-                     if ((Boolean)this.chatInfo.get() || (Boolean)this.debug.get()) {
-                        this.warning("Nothing to click that puts an anchor at %s from where you stand.", new Object[]{format(spot)});
-                     }
-
-                     this.finish();
-                     return;
-                  }
-
-                  if (!this.inHand(AnchorActions.findAnchor())) {
-                     return;
-                  }
-
-                  if (!AnchorActions.place(spot, this.options(this.placeLimit))) {
-                     return;
-                  }
-
-                  this.predicted = AnchorMacro.AnchorState.Anchor;
-                  if ((Boolean)this.debug.get()) {
-                     this.info("Placed anchor at %s", new Object[]{format(spot)});
-                  }
-                  break;
-               case Anchor:
-                  if (AnchorActions.charges(spot) < 0) {
-                     return;
-                  }
-
-                  if (!InvUtils.findInHotbar(new class_1792[]{class_1802.field_8801}).found()) {
-                     if ((Boolean)this.chatInfo.get()) {
-                        this.warning("No glowstone in the hotbar.", new Object[0]);
-                     }
-
-                     this.finish();
-                     return;
-                  }
-
-                  if (!this.inHand(AnchorActions.findGlowstone())) {
-                     return;
-                  }
-
-                  if (!AnchorActions.charge(spot, this.options())) {
-                     return;
-                  }
-
-                  this.predicted = AnchorMacro.AnchorState.Loaded;
-                  if ((Boolean)this.debug.get()) {
-                     this.info("Charged anchor at %s", new Object[]{format(spot)});
-                  }
-                  break;
-               case Loaded:
-                  if ((Boolean)this.shield.get() && !this.shieldDone) {
-                     AnchorMacro.ShieldStep step = this.placeShieldNow(spot);
-                     if (step == AnchorMacro.ShieldStep.Turning) {
-                        return;
-                     }
-
-                     this.shieldDone = true;
-                     if (step == AnchorMacro.ShieldStep.Placed && Stealth.turnCap() > 0.0) {
-                        return;
-                     }
-                  }
-
-                  String blast = this.safetyProblem(spot);
-                  if (blast != null) {
-                     if ((Boolean)this.chatInfo.get()) {
-                        this.warning("Cycle stopped by safe-anchor: %s.", new Object[]{blast});
-                     }
-
-                     this.finish();
-                     return;
-                  }
-
-                  int charges = Math.max(AnchorActions.charges(spot), 1);
-                  if (AnchorActions.offhandBlocksDetonation(charges)) {
-                     if ((Boolean)this.chatInfo.get()) {
-                        this.warning("Glowstone in your offhand would charge the anchor instead of setting it off.", new Object[0]);
-                     }
-
-                     this.finish();
-                     return;
-                  }
-
-                  int detonator = AnchorActions.findDetonationSlot(this.returnSlot);
-                  if (Stealth.humanMode() && !HumanSwap.ready(detonator, SWAP_PRIORITY)) {
-                     return;
-                  }
-
-                  if (!AnchorActions.detonate(spot, charges, this.options(this.explodeLimit), detonator)) {
-                     return;
-                  }
-
-                  if ((Boolean)this.debug.get()) {
-                     this.info("Detonated at %s", new Object[]{format(spot)});
-                  }
-
-                  this.finish();
-                  return;
-            }
-         }
+         int home = HotbarSwap.homeSlot();
+         return home != this.returnSlot && home != this.cycleSlot ? -1 : this.returnSlot;
       }
    }
 
@@ -759,32 +967,51 @@ public class AnchorMacro extends CrystalModule {
       this.predicted = null;
       this.predictedAge = 0;
       this.shieldDone = false;
+      this.sneakWarned = false;
+      this.viewWarned = false;
       this.shieldAssumed = null;
       this.shieldPlaced = null;
       this.cycleTicks = 0;
-      AnchorActions.resetTurn();
-      this.restore();
+      this.cameraTicks = 0;
+      this.sightTicks = 0;
+      this.slotTicks = 0;
+      AnchorActions.resetTurn(this);
+      if (this.returnSlot != -1 && !this.restorePending) {
+         this.restorePending = true;
+         this.restoreAt = this.ticks + AnchorActions.stepGap();
+      }
    }
 
    private int cycleTimeout() {
       double cap = Stealth.turnCap();
-      // Human mode spends up to two ticks per step on an honest hotbar switch.
-      int switching = Stealth.humanMode() ? 8 : 0;
-      return cap <= 0.0 ? (Integer)this.timeout.get() + switching : (Integer)this.timeout.get() + (int)Math.ceil(180.0 / cap) * 4 + switching;
+      return cap <= 0.0 ? (Integer)this.timeout.get() : (Integer)this.timeout.get() + (int)Math.ceil(180.0 / cap) * 4;
    }
 
-   // Silent swaps select, click and select back inside one tick, which no hand does. Human mode switches for real.
-   private boolean visibleSwaps() {
-      return this.switchMode.get() == AnchorMacro.SwitchMode.Hotbar || Stealth.humanMode();
-   }
-
-   // Human mode: an item is only used once it has been in hand for a full tick. Starts the switch if needed.
-   private boolean inHand(FindItemResult item) {
-      if (!Stealth.humanMode() || !item.found() || item.getHand() == class_1268.field_5810) {
+   private boolean waitingOnRate(AnchorMacro.AnchorState state) {
+      if (this.ticks < this.nextClickTick) {
+         return true;
+      } else if (this.working != null && !this.sightings.settled(this.working)) {
          return true;
       } else {
-         return HumanSwap.ready(item.slot(), SWAP_PRIORITY);
+         double cost = this.clickCost();
+         if (!this.speedLimit.canAfford(cost)) {
+            return true;
+         } else {
+            return switch (state) {
+               case Air -> !this.placeLimit.canAfford(cost);
+               case Anchor -> false;
+               case Loaded -> !this.explodeLimit.canAfford(cost);
+            };
+         }
       }
+   }
+
+   private double clickCost() {
+      if (Double.isNaN(this.nextCost)) {
+         this.nextCost = Stealth.actionCost();
+      }
+
+      return this.nextCost;
    }
 
    private AnchorActions.Options options() {
@@ -792,27 +1019,60 @@ public class AnchorMacro extends CrystalModule {
    }
 
    private AnchorActions.Options options(ActionBudget extra) {
-      boolean mustRotate = (Boolean)this.rotate.get() || Stealth.legitPlace() || Stealth.humanMode();
+      return this.options(extra, () -> {});
+   }
+
+   private boolean mustRotate() {
+      return (Boolean)this.rotate.get() || Stealth.legitPlace();
+   }
+
+   private AnchorActions.Options options(ActionBudget extra, Runnable onSent) {
+      boolean turn = this.mustRotate() && !TurnProgress.cameraNeeded();
+      class_2338 expected = this.working;
+      long version = this.activationVersion();
+      BooleanSupplier ready = () -> this.isActive()
+         && version == this.activationVersion()
+         && Objects.equals(expected, this.working)
+         && this.ticks >= this.nextClickTick
+         && (expected == null || this.sightings.settled(expected))
+         && (extra == null || extra.canAfford(this.clickCost()))
+         && this.speedLimit.canAfford(this.clickCost());
+      BooleanSupplier ahead = () -> this.isActive()
+         && version == this.activationVersion()
+         && Objects.equals(expected, this.working)
+         && this.ticks + 1 >= this.nextClickTick
+         && (expected == null || this.sightings.settledSoon(expected))
+         && (extra == null || extra.canAfford(this.clickCost()))
+         && this.speedLimit.canAfford(this.clickCost());
       BooleanSupplier gate = () -> {
-         double cost = Stealth.actionCost();
-         if (extra != null && !extra.canAfford(cost)) {
-            return false;
-         } else if (!this.speedLimit.canAfford(cost)) {
-            return false;
-         } else if (!Stealth.claimAction()) {
+         if (!ready.getAsBoolean()) {
             return false;
          } else {
-            return extra != null && !extra.tryConsume(cost) ? false : this.speedLimit.tryConsume(cost);
+            double cost = this.clickCost();
+            if (!Stealth.claimUse()) {
+               return false;
+            } else if (extra != null && !extra.tryConsume(cost)) {
+               return false;
+            } else if (!this.speedLimit.tryConsume(cost)) {
+               return false;
+            } else {
+               this.nextCost = Double.NaN;
+               int gap = AnchorActions.stepGap();
+               this.nextClickTick = this.ticks + gap;
+               this.sightings.pace(gap);
+               return true;
+            }
          }
       };
-      return new AnchorActions.Options(
-         mustRotate, (Boolean)this.swing.get(), this.visibleSwaps(), MACRO_ROTATION_PRIORITY, gate
-      );
+      return new AnchorActions.Options(turn, (Boolean)this.swing.get(), this.switchMode.get() == AnchorMacro.SwitchMode.Hotbar, 90, gate, onSent)
+         .withOwner(this)
+         .withReady(ready)
+         .withAhead(ahead);
    }
 
    private AnchorMacro.ShieldStep placeShieldNow(class_2338 anchorPos) {
       float bare = BlastShield.anchorDamage(this.mc.field_1724, anchorPos.method_46558());
-      if (bare <= (Double)this.shieldSkipBelow.get()) {
+      if (bare <= (Double)this.shieldSkipBelow.get() && this.safetyProblem(anchorPos, null) == null) {
          if ((Boolean)this.debug.get()) {
             this.info("No shield: blast is only %.1f, skip-shield-below is %.1f", new Object[]{bare, this.shieldSkipBelow.get()});
          }
@@ -829,45 +1089,60 @@ public class AnchorMacro extends CrystalModule {
          class_2338 spot = this.shieldSpotFor(anchorPos);
          if (spot == null) {
             if ((Boolean)this.debug.get() || (Boolean)this.chatInfo.get()) {
-               this.warning("No shield: %s.", new Object[]{this.lastShieldProblem});
+               this.report("No shield: %s.", this.lastShieldProblem);
             }
 
             return AnchorMacro.ShieldStep.Skipped;
          } else {
-            FindItemResult block = InvUtils.findInHotbar(new class_1792[]{((AnchorMacro.ShieldBlock)this.shieldBlock.get()).item()});
-            if (!block.found()) {
-               if ((Boolean)this.chatInfo.get()) {
-                  this.warning("No %s in the hotbar for the shield.", new Object[]{((AnchorMacro.ShieldBlock)this.shieldBlock.get()).item().toString()});
+            class_3965 support = this.supportFor(spot, anchorPos);
+            if (support == null) {
+               if ((Boolean)this.debug.get() || (Boolean)this.chatInfo.get()) {
+                  this.report(
+                     this.mustRotate()
+                        ? "No shield: no face you can see or reach to click against, other than the anchor."
+                        : "No shield: your view does not land on a face that puts the block at %s - turn rotate on for the shield.",
+                     format(spot)
+                  );
                }
 
                return AnchorMacro.ShieldStep.Skipped;
             } else {
-               class_3965 support = this.supportFor(spot, anchorPos);
-               if (support != null) {
-                  if (this.visibleSwaps()) {
-                     this.rememberSlot();
-                  }
-
-                  if (!this.inHand(block) || !AnchorActions.clickWith(support, block, this.options())) {
-                     return AnchorMacro.ShieldStep.Turning;
-                  } else {
-                     if ((Boolean)this.debug.get()) {
-                        this.info(
-                           "Shield at %s%s (blast %.1f, saves %.1f)",
-                           new Object[]{format(spot), this.lastShieldDiagonal ? " diagonal" : "", bare, this.lastShieldGain}
-                        );
-                     }
-
-                     this.shieldAssumed = spot;
-                     this.shieldPlaced = spot;
-                     return AnchorMacro.ShieldStep.Placed;
-                  }
-               } else {
-                  if ((Boolean)this.debug.get() || (Boolean)this.chatInfo.get()) {
-                     this.warning("No shield: no face you can see or reach to click against, other than the anchor.", new Object[0]);
+               class_1792 item = ((AnchorMacro.ShieldBlock)this.shieldBlock.get()).item();
+               boolean inHotbar = InvUtils.find(stack -> stack.method_31574(item), 0, 8).found();
+               boolean fromOffhand = this.mc.field_1724.method_6079().method_31574(item)
+                  && !InventoryGuard.offhandInFlight()
+                  && VanillaClick.reaches(support, class_1268.field_5810);
+               if (!inHotbar && !fromOffhand) {
+                  if ((Boolean)this.chatInfo.get()) {
+                     this.report("No %s in the hotbar for the shield.", item.toString());
                   }
 
                   return AnchorMacro.ShieldStep.Skipped;
+               } else {
+                  if (this.switchMode.get() == AnchorMacro.SwitchMode.Hotbar) {
+                     this.rememberSlot();
+                  }
+
+                  AnchorActions.Options shieldOptions = this.options(
+                     null,
+                     () -> {
+                        if ((Boolean)this.debug.get()) {
+                           this.info(
+                              "Shield at %s%s (blast %.1f, saves %.1f)",
+                              new Object[]{format(spot), this.lastShieldDiagonal ? " diagonal" : "", bare, this.lastShieldGain}
+                           );
+                        }
+
+                        this.shieldAssumed = spot;
+                        this.shieldPlaced = spot;
+                        this.shieldDone = true;
+                     }
+                  );
+                  if (!AnchorActions.clickWith(support, item, shieldOptions)) {
+                     return AnchorMacro.ShieldStep.Turning;
+                  } else {
+                     return shieldOptions.rotate() ? AnchorMacro.ShieldStep.Turning : AnchorMacro.ShieldStep.Placed;
+                  }
                }
             }
          }
@@ -884,19 +1159,35 @@ public class AnchorMacro extends CrystalModule {
       }
    }
 
+   private double crosshairReach() {
+      return this.reach();
+   }
+
+   private double reach() {
+      return Math.min((Double)this.range.get(), VanillaLimits.blockRange());
+   }
+
    private class_2338 findSpot() {
+      this.spotWaitsOnBlast = false;
+      this.spotWaitsOnSight = false;
       if (this.mode.get() == AnchorMacro.Mode.Crosshair) {
-         class_3965 hit = AimUtils.lookingAtBlock((Double)this.range.get());
+         class_3965 hit = AimUtils.lookingAtBlock(this.crosshairReach());
          if (hit == null) {
             return null;
          } else {
             class_2338 spot = this.spotFor(hit);
             if (spot == null) {
                return null;
-            } else if (AnchorActions.charges(spot) >= 0 || AnchorActions.canPlace(spot) && AnchorActions.placeHit(spot) != null) {
+            } else if (this.blastPending(spot)) {
+               this.spotWaitsOnBlast = true;
+               return null;
+            } else if (AnchorActions.charges(spot) >= 0 && !this.sightings.ready(spot)) {
+               this.spotWaitsOnSight = true;
+               return null;
+            } else if (AnchorActions.charges(spot) >= 0 || AnchorActions.canPlace(spot) && AnchorActions.placeHit(spot, this.mustRotate()) != null) {
                if (!Stealth.allowsBlock(spot, spot.method_46558())) {
                   return null;
-               } else if (this.safetyProblem(spot) != null) {
+               } else if (this.unsafeEvenShielded(spot) != null) {
                   return null;
                } else {
                   return this.inView(spot.method_46558()) ? spot : null;
@@ -906,18 +1197,20 @@ public class AnchorMacro extends CrystalModule {
             }
          }
       } else {
-         class_1657 target = TargetUtils.getPlayerTarget((Double)this.range.get() + 8.0, SortPriority.LowestHealth);
+         class_1657 target = TargetInfo.findPlayerTarget(this.reach() + 8.0, SortPriority.LowestHealth);
          if (target == null) {
             this.lastRejection = "no target in range";
             return null;
          } else {
             double selfHealth = EntityUtils.getTotalHealth(this.mc.field_1724);
             class_2338 origin = this.mc.field_1724.method_24515();
-            int radius = (int)Math.ceil((Double)this.range.get());
+            class_243 eyes = this.mc.field_1724.method_33571();
+            int radius = (int)Math.ceil(this.reach());
             class_2338 best = null;
             double bestScore = Double.NEGATIVE_INFINITY;
             int outOfRange = 0;
             int notInView = 0;
+            int outOfSight = 0;
             int stealthBlocked = 0;
             int cannotPlace = 0;
             int lethal = 0;
@@ -927,50 +1220,64 @@ public class AnchorMacro extends CrystalModule {
             String unsafeWhy = null;
             float bestRejectedDamage = 0.0F;
             float worstRatio = 0.0F;
+            boolean skippedBlast = false;
+            boolean skippedSight = false;
 
             for (int x = -radius; x <= radius; x++) {
                for (int y = -radius; y <= radius; y++) {
                   for (int z = -radius; z <= radius; z++) {
                      class_2338 pos = origin.method_10069(x, y, z);
                      class_243 center = pos.method_46558();
-                     if (this.mc.field_1724.method_33571().method_1022(center) > (Double)this.range.get()) {
+                     if (eyes.method_1022(center) > this.reach()) {
                         outOfRange++;
                      } else if (!this.inView(center)) {
                         notInView++;
-                     } else if (!Stealth.allowsBlock(pos, center)) {
-                        stealthBlocked++;
-                     } else if (AnchorActions.charges(pos) < 0 && !AnchorActions.canPlace(pos)) {
-                        cannotPlace++;
-                     } else if (this.selfDamage(center) >= selfHealth) {
-                        lethal++;
+                     } else if (!Stealth.inView(center)) {
+                        outOfSight++;
+                     } else if (this.blastPending(pos)) {
+                        skippedBlast = true;
                      } else {
-                        String problem = this.safetyProblem(pos);
-                        if (problem != null) {
-                           class_2338 rescue = this.shieldSpotFor(pos);
-                           if (rescue == null || this.safetyProblem(pos, rescue) != null) {
-                              unsafe++;
-                              unsafeWhy = problem;
-                              continue;
-                           }
-                        }
-
-                        float damage = BlastShield.anchorDamage(target, center);
-                        if (damage < (Double)this.minDamage.get()) {
-                           tooWeak++;
-                           bestRejectedDamage = Math.max(bestRejectedDamage, damage);
+                        boolean anchorThere = AnchorActions.charges(pos) >= 0;
+                        if (!anchorThere && !AnchorActions.canPlace(pos)) {
+                           cannotPlace++;
+                        } else if (!Stealth.allowsBlock(pos, center)) {
+                           stealthBlocked++;
                         } else {
-                           float self = this.selfDamageBehind(center, this.shieldStands() ? this.shieldPlaced : null);
-                           if (self > 0.0F && damage / self < (Double)this.minRatio.get()) {
-                              badTrade++;
-                              worstRatio = Math.max(worstRatio, damage / self);
+                           float self = this.selfDamage(center);
+                           if (self >= selfHealth) {
+                              lethal++;
                            } else {
-                              double score = damage - self;
-                              if (score > bestScore) {
-                                 if (AnchorActions.charges(pos) < 0 && AnchorActions.placeHit(pos) == null) {
-                                    cannotPlace++;
-                                 } else {
-                                    bestScore = score;
-                                    best = pos;
+                              float damage = BlastShield.anchorDamage(target, center);
+                              if (damage < (Double)this.minDamage.get()) {
+                                 tooWeak++;
+                                 bestRejectedDamage = Math.max(bestRejectedDamage, damage);
+                              } else if (self > 0.0F && damage / self < (Double)this.minRatio.get()) {
+                                 badTrade++;
+                                 worstRatio = Math.max(worstRatio, damage / self);
+                              } else if (!this.sightings.pickable(pos)) {
+                                 skippedSight = true;
+                              } else {
+                                 double score = damage - self;
+                                 if (!(score <= bestScore)) {
+                                    String problem = this.safetyProblemFor(self);
+                                    if (problem != null) {
+                                       class_2338 rescue = this.shieldSpotFor(pos);
+                                       if (rescue == null || this.safetyProblem(pos, rescue) != null) {
+                                          unsafe++;
+                                          unsafeWhy = problem;
+                                          continue;
+                                       }
+                                    }
+
+                                    class_3965 click = anchorThere
+                                       ? AnchorActions.hitResultFor(pos, this.mustRotate())
+                                       : AnchorActions.placeHit(pos, this.mustRotate());
+                                    if (click == null) {
+                                       cannotPlace++;
+                                    } else {
+                                       bestScore = score;
+                                       best = pos;
+                                    }
                                  }
                               }
                            }
@@ -981,9 +1288,28 @@ public class AnchorMacro extends CrystalModule {
             }
 
             if (best == null) {
-               this.lastRejection = this.describeSpotRejection(
-                  outOfRange, notInView, stealthBlocked, cannotPlace, lethal, unsafe, unsafeWhy, tooWeak, bestRejectedDamage, badTrade, worstRatio
-               );
+               this.spotWaitsOnBlast = skippedBlast;
+               this.spotWaitsOnSight = skippedSight;
+               this.lastRejection = skippedBlast
+                  ? "the anchor just set off has not gone yet on your screen"
+                  : (
+                     skippedSight
+                        ? "the spot has only just appeared or become worth it"
+                        : this.describeSpotRejection(
+                           outOfRange,
+                           notInView,
+                           outOfSight,
+                           stealthBlocked,
+                           cannotPlace,
+                           lethal,
+                           unsafe,
+                           unsafeWhy,
+                           tooWeak,
+                           bestRejectedDamage,
+                           badTrade,
+                           worstRatio
+                        )
+                  );
             } else {
                this.lastRejection = null;
             }
@@ -996,6 +1322,7 @@ public class AnchorMacro extends CrystalModule {
    private String describeSpotRejection(
       int outOfRange,
       int notInView,
+      int outOfSight,
       int stealthBlocked,
       int cannotPlace,
       int lethal,
@@ -1006,28 +1333,39 @@ public class AnchorMacro extends CrystalModule {
       int badTrade,
       float bestRatio
    ) {
-      if (badTrade > 0) {
+      if (unsafe > 0) {
+         return String.format("%d spots refused by damage-limit: %s", unsafe, unsafeWhy);
+      } else if (badTrade > 0) {
          return String.format("%d spots refused by min-damage-ratio %.1f - best trade was only %.1fx", badTrade, this.minRatio.get(), bestRatio);
       } else if (tooWeak > 0) {
-         return String.format("%d spots were safe but none reached min-damage %.1f (best was %.1f)", tooWeak, this.minDamage.get(), bestRejected);
-      } else if (unsafe > 0) {
-         return String.format("%d spots refused by damage-limit: %s", unsafe, unsafeWhy);
+         return String.format("%d spots in reach, but none reached min-damage %.1f (best was %.1f)", tooWeak, this.minDamage.get(), bestRejected);
       } else if (lethal > 0) {
          return String.format("%d spots would simply kill you", lethal);
       } else if (cannotPlace > 0) {
          return "nowhere an anchor could stand";
       } else if (stealthBlocked > 0) {
-         return "blocked by Stealth's limits";
+         return "blocked by Stealth's limits - out of reach or no line of sight";
       } else if (notInView > 0) {
          return "everything usable is outside your field of view";
+      } else if (outOfSight > 0) {
+         return "everything usable is out of sight - outside Stealth's view-angle, behind or beside you";
       } else {
-         return outOfRange > 0 ? String.format("nothing within range %.1f", this.range.get()) : "nothing in range at all";
+         return outOfRange > 0 ? String.format("nothing within range %.1f", this.reach()) : "nothing in range at all";
       }
    }
 
    private class_3965 supportFor(class_2338 target, class_2338 anchorPos) {
-      LegitPlace.Result result = LegitPlace.forBlock(target, VanillaLimits.blockRange(), anchorPos);
-      return result == null ? null : result.hit();
+      double reach = VanillaLimits.blockRange();
+      boolean anchorPending = AnchorActions.charges(anchorPos) < 0;
+      if (this.mustRotate()) {
+         LegitPlace.Result result = LegitPlace.forBlock(target, reach, anchorPos, anchorPending);
+         return result == null ? null : result.hit();
+      } else {
+         class_3965 hit = LegitPlace.confirmPlacement(
+            target, ((AnchorMacro.ShieldBlock)this.shieldBlock.get()).item(), LegitPlace.currentYaw(), LegitPlace.currentPitch(), reach
+         );
+         return hit != null && anchorPending && LegitPlace.passesThrough(hit.method_17784(), anchorPos) ? null : hit;
+      }
    }
 
    private class_2338 shieldSpotFor(class_2338 anchorPos) {
@@ -1047,6 +1385,7 @@ public class AnchorMacro extends CrystalModule {
             float bestGain = 0.0F;
             int bestIndex = -1;
             float bestRejectedGain = -1.0F;
+            boolean hidesAnchor = false;
             int index = -1;
 
             for (class_2338 pos : candidates) {
@@ -1058,18 +1397,26 @@ public class AnchorMacro extends CrystalModule {
                      && AnchorActions.canReplaceAt(pos, ((AnchorMacro.ShieldBlock)this.shieldBlock.get()).item())) {
                   if (!BlockUtils.canPlaceBlock(pos, true, ((AnchorMacro.ShieldBlock)this.shieldBlock.get()).block())) {
                      this.lastShieldProblem = "the shield spots overlap your own hitbox - step to the middle of your block";
-                  } else if (this.supportFor(pos, anchorPos) == null) {
-                     this.lastShieldProblem = "no face you can see or reach to click against there, other than the anchor";
-                  } else if (Stealth.legitPlace() && !LegitPlace.stillClickable(anchorPos, VanillaLimits.blockRange(), pos)) {
-                     this.lastShieldProblem = "a shield there would hide every face of the anchor you could still click to set it off";
                   } else {
-                     float gain = bare - BlastShield.anchorDamageBehindShield(this.mc.field_1724, anchor, pos, shieldState);
-                     if (gain < (Double)this.minShieldGain.get()) {
-                        bestRejectedGain = Math.max(bestRejectedGain, gain);
-                     } else if (gain > bestGain) {
-                        best = pos;
-                        bestGain = gain;
-                        bestIndex = index;
+                     class_3965 support = this.supportFor(pos, anchorPos);
+                     if (support == null) {
+                        this.lastShieldProblem = "no face you can see or reach to click against there, other than the anchor";
+                     } else if (!Stealth.inView(support.method_17784())) {
+                        this.lastShieldProblem = "the only face to click for it is out of sight - outside Stealth's view-angle";
+                     } else {
+                        float gain = bare - BlastShield.anchorDamageBehindShield(this.mc.field_1724, anchor, pos, shieldState);
+                        if (gain < (Double)this.minShieldGain.get()) {
+                           bestRejectedGain = Math.max(bestRejectedGain, gain);
+                        } else if (!(gain <= bestGain)) {
+                           if (!LegitPlace.stillClickable(anchorPos, VanillaLimits.blockRange(), pos)) {
+                              hidesAnchor = true;
+                              this.lastShieldProblem = "a shield there would hide every face of the anchor you could still click to set it off";
+                           } else {
+                              best = pos;
+                              bestGain = gain;
+                              bestIndex = index;
+                           }
+                        }
                      }
                   }
                } else {
@@ -1077,8 +1424,12 @@ public class AnchorMacro extends CrystalModule {
                }
             }
 
-            if (best == null && bestRejectedGain >= 0.0F) {
-               this.lastShieldProblem = String.format("best spot only saves %.1f, min-shield-gain is %.1f", bestRejectedGain, this.minShieldGain.get());
+            if (best == null) {
+               if (hidesAnchor) {
+                  this.lastShieldProblem = "a shield there would hide every face of the anchor you could still click to set it off";
+               } else if (bestRejectedGain >= 0.0F) {
+                  this.lastShieldProblem = String.format("best spot only saves %.1f, min-shield-gain is %.1f", bestRejectedGain, this.minShieldGain.get());
+               }
             }
 
             this.lastShieldGain = bestGain;
@@ -1089,7 +1440,21 @@ public class AnchorMacro extends CrystalModule {
    }
 
    private class_2338 effectiveShield() {
-      return this.shieldStands() ? this.shieldPlaced : this.shieldAssumed;
+      return this.shieldStands() ? this.shieldPlaced : null;
+   }
+
+   private String unsafeEvenShielded(class_2338 pos) {
+      String problem = this.safetyProblem(pos);
+      if (problem != null && (Boolean)this.shield.get() && !this.shieldDone && this.effectiveShield() == null) {
+         class_2338 rescue = this.shieldSpotFor(pos);
+         return rescue != null && this.safetyProblem(pos, rescue) == null ? null : problem;
+      } else {
+         return problem;
+      }
+   }
+
+   private boolean blastPending(class_2338 pos) {
+      return this.detonatedAt != null && this.detonatedAt.equals(pos);
    }
 
    private float selfDamageBehind(class_243 center, class_2338 shieldAt) {
@@ -1106,9 +1471,9 @@ public class AnchorMacro extends CrystalModule {
       if (this.mode.get() != AnchorMacro.Mode.Crosshair) {
          return this.lastRejection != null ? this.lastRejection + "." : "Nothing in range that an anchor could act on.";
       } else {
-         class_3965 hit = AimUtils.lookingAtBlock((Double)this.range.get());
+         class_3965 hit = AimUtils.lookingAtBlock(this.crosshairReach());
          if (hit == null) {
-            return String.format("Your crosshair is not on a block within %.1f blocks.", this.range.get());
+            return String.format("Your crosshair is not on a block within %.1f blocks.", this.crosshairReach());
          } else {
             class_2338 spot = this.spotFor(hit);
             if (spot == null) {
@@ -1122,8 +1487,14 @@ public class AnchorMacro extends CrystalModule {
                return String.format(
                   "Cannot put an anchor at %d %d %d - blocked, or nothing to click against.", spot.method_10263(), spot.method_10264(), spot.method_10260()
                );
+            } else if (this.blastPending(spot)) {
+               return "The anchor you just set off has not gone yet on your screen - waiting for the server.";
+            } else if (!Stealth.inView(spot.method_46558())) {
+               return "The spot is out of sight - outside Stealth's view-angle.";
+            } else if (!Stealth.allowsBlock(spot, spot.method_46558())) {
+               return "Stealth blocks the spot - out of reach, or no line of sight to it.";
             } else {
-               String unsafe = this.safetyProblem(spot);
+               String unsafe = this.unsafeEvenShielded(spot);
                if (unsafe != null) {
                   return "Blocked by safe-anchor: " + unsafe + ".";
                } else {
@@ -1141,16 +1512,23 @@ public class AnchorMacro extends CrystalModule {
    private String safetyProblem(class_2338 pos, class_2338 shieldAt) {
       if (!(Boolean)this.damageLimit.get()) {
          return null;
+      } else {
+         return this.requireTotem.get() && !this.mc.field_1724.method_6079().method_31574(class_1802.field_8288)
+            ? "no totem in your offhand"
+            : this.safetyProblemFor(this.selfDamageBehind(pos.method_46558(), shieldAt));
+      }
+   }
+
+   private String safetyProblemFor(float selfDamage) {
+      if (!(Boolean)this.damageLimit.get()) {
+         return null;
       } else if ((Boolean)this.requireTotem.get() && !this.mc.field_1724.method_6079().method_31574(class_1802.field_8288)) {
          return "no totem in your offhand";
+      } else if (selfDamage > (Double)this.maxSelfDamage.get()) {
+         return String.format("it would deal %.1f to you, cap is %.1f", selfDamage, this.maxSelfDamage.get());
       } else {
-         float selfDamage = this.selfDamageBehind(pos.method_46558(), shieldAt);
-         if (selfDamage > (Double)this.maxSelfDamage.get()) {
-            return String.format("it would deal %.1f to you, cap is %.1f", selfDamage, this.maxSelfDamage.get());
-         } else {
-            double left = EntityUtils.getTotalHealth(this.mc.field_1724) - selfDamage;
-            return left < this.keepHealth.get() ? String.format("it would leave you on %.1f health", Math.max(0.0, left)) : null;
-         }
+         double left = EntityUtils.getTotalHealth(this.mc.field_1724) - selfDamage;
+         return left < this.keepHealth.get() ? String.format("it would leave you on %.1f health", Math.max(0.0, left)) : null;
       }
    }
 
@@ -1178,6 +1556,9 @@ public class AnchorMacro extends CrystalModule {
       Air,
       Anchor,
       Loaded;
+   }
+
+   private record Blast(class_2338 pos, int tick) {
    }
 
    public static enum Mode {

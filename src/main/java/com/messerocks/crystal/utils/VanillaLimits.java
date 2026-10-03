@@ -24,7 +24,7 @@ public final class VanillaLimits {
          return false;
       } else {
          double range = mc.field_1724.method_55754();
-         return new class_238(pos).method_49271(mc.field_1724.method_33571()) < (range + 1.0) * (range + 1.0);
+         return new class_238(pos).method_49271(mc.field_1724.method_33571()) <= range * range;
       }
    }
 

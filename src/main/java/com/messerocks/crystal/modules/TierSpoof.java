@@ -19,12 +19,12 @@ import meteordevelopment.orbit.EventHandler;
 import net.fabricmc.loader.api.FabricLoader;
 
 public class TierSpoof extends CrystalModule {
-   private static final List<String> FALLBACK_MODES = List.of("vanilla", "uhc", "pot", "nethop", "smp", "sword", "axe", "mace");
    private final SettingGroup sgGeneral = this.settings.getDefaultGroup();
    private final Setting<Integer> tier = this.sgGeneral
       .add(
          ((Builder)((Builder)((Builder)new Builder().name("tier")).description("The number: 2 with high gives HT2.")).defaultValue(2))
             .min(1)
+            .max(5)
             .sliderRange(1, 5)
             .build()
       );
@@ -65,6 +65,10 @@ public class TierSpoof extends CrystalModule {
             .build()
       );
    private int ticks;
+   private long announcedForVersion = -1L;
+   private UUID writtenPlayer;
+   private Object originalTier;
+   private Object lastWritten;
 
    public TierSpoof() {
       super(CrystalAddon.CATEGORY, "tier-spoof", "Show a tier of your choosing on your own nametag in TierTagger. Local only - nobody else sees it.");
@@ -76,13 +80,21 @@ public class TierSpoof extends CrystalModule {
          this.toggle();
       } else {
          this.ticks = 0;
-         this.info("Local only: other players still see your real tier.", new Object[0]);
-         if ((Boolean)this.listModes.get()) {
-            List<String> ids = this.gamemodeIds();
-            this.info("Gamemodes in this tierlist: %s", new Object[]{String.join(", ", ids)});
-            String chosen = ((String)this.gamemode.get()).trim();
-            if (!chosen.isEmpty() && !ids.contains(chosen)) {
-               this.warning("'%s' is not one of them - the tier is still written, but TierTagger may not show it.", new Object[]{chosen});
+         if (this.activationVersion() != this.announcedForVersion) {
+            this.announcedForVersion = this.activationVersion();
+            this.info("Local only: other players still see your real tier.", new Object[0]);
+            if ((Boolean)this.listModes.get()) {
+               List<String> ids = this.gamemodeIds();
+               if (ids == TierSpoof.Modes.FALLBACK) {
+                  this.info("TierTagger has not loaded its gamemode list, using the MCTiers ids: %s", new Object[]{String.join(", ", ids)});
+               } else {
+                  this.info("Gamemodes in this tierlist: %s", new Object[]{String.join(", ", ids)});
+               }
+
+               String chosen = ((String)this.gamemode.get()).trim();
+               if (!chosen.isEmpty() && !ids.contains(chosen)) {
+                  this.warning("'%s' is not one of them - the tier is still written, but TierTagger may not show it.", new Object[]{chosen});
+               }
             }
          }
       }
@@ -90,12 +102,7 @@ public class TierSpoof extends CrystalModule {
 
    public void onDeactivate() {
       try {
-         if (this.mc.field_1724 != null) {
-            Map<UUID, Object> tiers = this.tiersMap();
-            if (tiers != null) {
-               tiers.remove(this.mc.field_1724.method_5667());
-            }
-         }
+         this.restoreTier();
       } catch (Throwable var2) {
       }
    }
@@ -119,6 +126,13 @@ public class TierSpoof extends CrystalModule {
    private void write() throws Exception {
       Map<UUID, Object> tiers = this.tiersMap();
       if (tiers != null) {
+         UUID player = this.mc.field_1724.method_5667();
+         if (!player.equals(this.writtenPlayer)) {
+            this.restoreTier();
+            this.writtenPlayer = player;
+            this.originalTier = null;
+         }
+
          Object ranking = this.buildRanking();
          Map<String, Object> byMode = new HashMap<>();
          String chosen = ((String)this.gamemode.get()).trim();
@@ -130,7 +144,33 @@ public class TierSpoof extends CrystalModule {
             byMode.put(chosen, ranking);
          }
 
-         tiers.put(this.mc.field_1724.method_5667(), Optional.of(byMode));
+         Object entry = Optional.of(byMode);
+         Object previous = this.lastWritten;
+         tiers.compute(player, (uuid, current) -> {
+            if (current != previous || previous == null) {
+               this.originalTier = current;
+            }
+
+            return entry;
+         });
+         this.lastWritten = entry;
+      }
+   }
+
+   private void restoreTier() throws Exception {
+      if (this.writtenPlayer != null) {
+         Map<UUID, Object> tiers = this.tiersMap();
+         if (tiers != null && this.lastWritten != null) {
+            if (this.originalTier instanceof Optional<?> optional && optional.isPresent()) {
+               tiers.replace(this.writtenPlayer, this.lastWritten, this.originalTier);
+            } else {
+               tiers.remove(this.writtenPlayer, this.lastWritten);
+            }
+         }
+
+         this.writtenPlayer = null;
+         this.originalTier = null;
+         this.lastWritten = null;
       }
    }
 
@@ -153,22 +193,9 @@ public class TierSpoof extends CrystalModule {
       try {
          Class<?> cache = Class.forName("com.kevin.tiertagger.TierCache");
          Method getModes = cache.getMethod("getGamemodes");
-         List<?> modes = (List<?>)getModes.invoke(null);
-         if (modes != null && !modes.isEmpty()) {
-            List<String> ids = new ArrayList<>(modes.size());
-
-            for (Object mode : modes) {
-               if (mode.getClass().getMethod("id").invoke(mode) instanceof String s) {
-                  ids.add(s);
-               }
-            }
-
-            return ids.isEmpty() ? FALLBACK_MODES : ids;
-         } else {
-            return FALLBACK_MODES;
-         }
-      } catch (Throwable var9) {
-         return FALLBACK_MODES;
+         return TierSpoof.Modes.ids((List<?>)getModes.invoke(null));
+      } catch (Throwable var3) {
+         return TierSpoof.Modes.FALLBACK;
       }
    }
 
@@ -176,5 +203,39 @@ public class TierSpoof extends CrystalModule {
       String label = (this.retired.get() ? "R" : "") + (this.high.get() ? "HT" : "LT") + this.tier.get();
       String chosen = ((String)this.gamemode.get()).trim();
       return chosen.isEmpty() ? label : label + " " + chosen;
+   }
+
+   static final class Modes {
+      static final List<String> FALLBACK = List.of("vanilla", "uhc", "pot", "nethop", "smp", "sword", "axe", "mace");
+
+      private Modes() {
+      }
+
+      static List<String> ids(List<?> modes) throws ReflectiveOperationException {
+         if (modes != null && !modes.isEmpty()) {
+            List<String> ids = new ArrayList<>(modes.size());
+
+            for (Object mode : modes) {
+               if (!isNone(mode) && mode.getClass().getMethod("id").invoke(mode) instanceof String s) {
+                  ids.add(s);
+               }
+            }
+
+            return ids.isEmpty() ? FALLBACK : ids;
+         } else {
+            return FALLBACK;
+         }
+      }
+
+      static boolean isNone(Object mode) throws ReflectiveOperationException {
+         Method method;
+         try {
+            method = mode.getClass().getMethod("isNone");
+         } catch (NoSuchMethodException var3) {
+            return false;
+         }
+
+         return Boolean.TRUE.equals(method.invoke(mode));
+      }
    }
 }
