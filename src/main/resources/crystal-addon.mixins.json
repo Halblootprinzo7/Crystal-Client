@@ -5,7 +5,12 @@
   "compatibilityLevel": "JAVA_21",
   "client": [
     "EssentialRenderLayerFactoryMixin",
-    "RenderLayerInvoker"
+    "HandledScreenAccessor",
+    "RenderLayerInvoker",
+    "BlockItemInvoker",
+    "MinecraftClientAccessor",
+    "KeyboardInputMixin",
+    "OwnClickMixin"
   ],
   "injectors": {
     "defaultRequire": 1

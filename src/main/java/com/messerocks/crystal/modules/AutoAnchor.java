@@ -7,27 +7,42 @@ import com.messerocks.crystal.utils.AimUtils;
 import com.messerocks.crystal.utils.AnchorActions;
 import com.messerocks.crystal.utils.AnchorSequence;
 import com.messerocks.crystal.utils.BlastShield;
-import com.messerocks.crystal.utils.CrystalUtils;
+import com.messerocks.crystal.utils.InventoryGuard;
+import com.messerocks.crystal.utils.RevivedPlayers;
+import com.messerocks.crystal.utils.TurnProgress;
+import com.messerocks.crystal.utils.VanillaLimits;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
 import java.util.function.BooleanSupplier;
+import meteordevelopment.meteorclient.events.packets.PacketEvent.Sent;
 import meteordevelopment.meteorclient.events.render.Render3DEvent;
 import meteordevelopment.meteorclient.events.world.TickEvent.Pre;
 import meteordevelopment.meteorclient.renderer.ShapeMode;
 import meteordevelopment.meteorclient.settings.Setting;
 import meteordevelopment.meteorclient.settings.SettingGroup;
 import meteordevelopment.meteorclient.settings.DoubleSetting.Builder;
+import meteordevelopment.meteorclient.systems.friends.Friends;
 import meteordevelopment.meteorclient.systems.modules.Modules;
 import meteordevelopment.meteorclient.utils.entity.EntityUtils;
 import meteordevelopment.meteorclient.utils.entity.SortPriority;
 import meteordevelopment.meteorclient.utils.entity.TargetUtils;
+import meteordevelopment.meteorclient.utils.player.PlayerUtils;
 import meteordevelopment.meteorclient.utils.render.color.Color;
 import meteordevelopment.meteorclient.utils.render.color.SettingColor;
 import meteordevelopment.orbit.EventHandler;
+import net.minecraft.class_1268;
 import net.minecraft.class_1657;
+import net.minecraft.class_1750;
+import net.minecraft.class_1799;
 import net.minecraft.class_1802;
+import net.minecraft.class_1934;
 import net.minecraft.class_1937;
 import net.minecraft.class_2338;
 import net.minecraft.class_243;
+import net.minecraft.class_3532;
 import net.minecraft.class_3965;
+import net.minecraft.class_640;
 
 public class AutoAnchor extends CrystalModule {
    private final SettingGroup sgGeneral = this.settings.getDefaultGroup();
@@ -54,7 +69,8 @@ public class AutoAnchor extends CrystalModule {
       );
    private final Setting<Double> range = this.sgGeneral
       .add(
-         ((Builder)((Builder)new Builder().name("range")).description("Maximum distance to act on an anchor."))
+         ((Builder)((Builder)new Builder().name("range"))
+               .description("Maximum distance to act on an anchor. Never further than the server's block interaction range, whatever this says."))
             .defaultValue(4.5)
             .min(0.0)
             .sliderMax(6.0)
@@ -70,17 +86,22 @@ public class AutoAnchor extends CrystalModule {
       );
    private final Setting<Double> speed = this.sgGeneral
       .add(
-         ((Builder)((Builder)new Builder().name("speed")).description("Actions per second across the whole cycle. 0 is unlimited."))
+         ((Builder)((Builder)new Builder().name("speed"))
+               .description(
+                  "Clicks per second across the whole cycle, at an irregular spacing. Two clicks of one cycle are at least two ticks apart regardless, and Stealth's max-actions-per-second caps all modules together."
+               ))
             .defaultValue(10.0)
-            .min(0.0)
-            .sliderMax(40.0)
+            .range(1.0, 20.0)
+            .sliderRange(1.0, 20.0)
             .build()
       );
    private final Setting<AutoAnchor.SwitchMode> switchMode = this.sgGeneral
       .add(
          ((meteordevelopment.meteorclient.settings.EnumSetting.Builder)((meteordevelopment.meteorclient.settings.EnumSetting.Builder)((meteordevelopment.meteorclient.settings.EnumSetting.Builder)new meteordevelopment.meteorclient.settings.EnumSetting.Builder()
                      .name("switch-mode"))
-                  .description("Hotbar really moves your selection onto the item. Silent swaps back within the tick."))
+                  .description(
+                     "Hotbar really moves your selection onto the item - the number key a tick before the click, while the head still turns or the pace runs out, since a slot has to stand a tick before it clicks. Silent goes back to your slot once a few ticks have passed without a click; its click comes a tick after the switch."
+                  ))
                .defaultValue(AutoAnchor.SwitchMode.Hotbar))
             .build()
       );
@@ -88,7 +109,9 @@ public class AutoAnchor extends CrystalModule {
       .add(
          ((meteordevelopment.meteorclient.settings.BoolSetting.Builder)((meteordevelopment.meteorclient.settings.BoolSetting.Builder)((meteordevelopment.meteorclient.settings.BoolSetting.Builder)new meteordevelopment.meteorclient.settings.BoolSetting.Builder()
                      .name("rotate"))
-                  .description("Face the anchor before acting. Ignored while aim mode is Crosshair."))
+                  .description(
+                     "Face the anchor before acting. Off, a step only goes out when the rotation the server already has lands on the right face. Ignored while aim mode is Crosshair."
+                  ))
                .defaultValue(true))
             .build()
       );
@@ -98,14 +121,6 @@ public class AutoAnchor extends CrystalModule {
                      .name("swing"))
                   .description("Render the hand swing client side."))
                .defaultValue(false))
-            .build()
-      );
-   private final Setting<Boolean> pauseOnUse = this.sgGeneral
-      .add(
-         ((meteordevelopment.meteorclient.settings.BoolSetting.Builder)((meteordevelopment.meteorclient.settings.BoolSetting.Builder)((meteordevelopment.meteorclient.settings.BoolSetting.Builder)new meteordevelopment.meteorclient.settings.BoolSetting.Builder()
-                     .name("pause-on-use"))
-                  .description("Stop while eating or drinking."))
-               .defaultValue(true))
             .build()
       );
    private final Setting<Boolean> oneClick = this.sgAutomation
@@ -215,7 +230,7 @@ public class AutoAnchor extends CrystalModule {
          ((meteordevelopment.meteorclient.settings.BoolSetting.Builder)((meteordevelopment.meteorclient.settings.BoolSetting.Builder)((meteordevelopment.meteorclient.settings.BoolSetting.Builder)new meteordevelopment.meteorclient.settings.BoolSetting.Builder()
                      .name("predict-steps"))
                   .description(
-                     "Move on from place and charge as soon as the click is sent, instead of waiting for the server to show it. Without this the cycle costs three round trips - three times your ping on top of its three ticks - which is what makes anchors feel dead on a laggy server. The server handles packets in order, so the steps still land in order."
+                     "Move on from place and charge as soon as the click is sent, instead of waiting for the server to show it. Without this the cycle costs three round trips - three times your ping on top of its clicks - which is what makes anchors feel dead on a laggy server. The server handles packets in order, so the steps still land in order. Either way the clicks are at least two ticks apart."
                   ))
                .defaultValue(true))
             .build()
@@ -243,7 +258,9 @@ public class AutoAnchor extends CrystalModule {
       .add(
          ((meteordevelopment.meteorclient.settings.BoolSetting.Builder)((meteordevelopment.meteorclient.settings.BoolSetting.Builder)((meteordevelopment.meteorclient.settings.BoolSetting.Builder)new meteordevelopment.meteorclient.settings.BoolSetting.Builder()
                      .name("auto-refill"))
-                  .description("Pull anchors and glowstone from your inventory into a free hotbar slot."))
+                  .description(
+                     "Pull anchors and glowstone from your inventory into a free hotbar slot - one swap click, only while you stand still and once a hand could have opened the inventory and pointed at the stack, with a pause before the next click."
+                  ))
                .defaultValue(true))
             .build()
       );
@@ -267,13 +284,16 @@ public class AutoAnchor extends CrystalModule {
       .add(
          ((meteordevelopment.meteorclient.settings.EnumSetting.Builder)((meteordevelopment.meteorclient.settings.EnumSetting.Builder)((meteordevelopment.meteorclient.settings.EnumSetting.Builder)new meteordevelopment.meteorclient.settings.EnumSetting.Builder()
                      .name("aim-mode"))
-                  .description("Fov only acts on anchors that are actually on your screen. Crosshair narrows that to the one block you point at."))
+                  .description(
+                     "Fov only acts on anchors that are actually on your screen. Crosshair narrows that to the one block you point at. Off still keeps to what lies in front of you - Stealth's view-angle holds for every module."
+                  ))
                .defaultValue(AutoAnchor.AimMode.Off))
             .build()
       );
    private final Setting<Double> maxAngle = this.sgAim
       .add(
-         ((Builder)((Builder)((Builder)new Builder().name("max-angle")).description("Half angle of the cone around your view direction."))
+         ((Builder)((Builder)((Builder)new Builder().name("max-angle"))
+                  .description("Half angle of the cone around your view direction. Never wider than Stealth's view-angle, which holds for every module."))
                .defaultValue(45.0)
                .min(1.0)
                .sliderRange(5.0, 180.0)
@@ -326,8 +346,12 @@ public class AutoAnchor extends CrystalModule {
             .build()
       );
    private class_1657 target;
-   private final AnchorSequence sequence = new AnchorSequence();
+   private final AnchorActions.Sightings sightings = new AnchorActions.Sightings();
+   private final AnchorSequence sequence = new AnchorSequence(this.sightings);
    private final ActionBudget budget = new ActionBudget();
+   private final AnchorActions.Refill refill = new AnchorActions.Refill();
+   private double nextCost = Double.NaN;
+   private class_2338 sightDropped;
 
    public AutoAnchor() {
       super(CrystalAddon.CATEGORY, "auto-anchor", "Fully automatic respawn anchor aura with confirmed steps.");
@@ -337,64 +361,143 @@ public class AutoAnchor extends CrystalModule {
       this.target = null;
       this.sequence.cancel();
       this.budget.reset();
-      AnchorActions.resetTurn();
+      this.sightings.clear();
+      this.refill.reset();
+      this.sightDropped = null;
+      AnchorActions.resetTurn(this);
+   }
+
+   @EventHandler
+   private void onSent(Sent event) {
+      if (this.mc.method_18854()) {
+         this.sightings.onSent(event.packet);
+      }
    }
 
    @EventHandler
    private void onTick(Pre event) {
-      if (this.mc.field_1724 != null && this.mc.field_1687 != null && this.mc.field_1761 != null) {
-         this.budget.update((Double)this.speed.get(), 1);
-         if ((Boolean)this.netherGuard.get() && this.mc.field_1687.method_27983() == class_1937.field_25180) {
-            this.sequence.cancel();
-         } else if (!(Boolean)this.pauseOnUse.get() || !this.mc.field_1724.method_6115()) {
-            if (this.placingAllowed() || (Boolean)this.autoCharge.get() || (Boolean)this.autoDetonate.get()) {
-               if ((Boolean)this.autoRefill.get() && !AnchorActions.refillHotbar(class_1802.field_23141)) {
-                  AnchorActions.refillHotbar(class_1802.field_8801);
-               }
+      if (this.isActive()) {
+         if (this.mc.field_1724 != null && this.mc.field_1687 != null && this.mc.field_1761 != null) {
+            if (this.sessionChanged()) {
+               this.onDeactivate();
+               this.sequence.reset();
+            }
 
-               this.target = TargetUtils.getPlayerTarget((Double)this.targetRange.get(), (SortPriority)this.priority.get());
-               if (TargetUtils.isBadTarget(this.target, (Double)this.targetRange.get())) {
-                  this.target = null;
-                  if (!(Boolean)this.oneClick.get()) {
-                     this.sequence.cancel();
-                     return;
-                  }
-               }
+            this.sequence.tick();
+            this.sightings.tick();
+            if (Stealth.paused()) {
+               AnchorActions.resetTurn(this);
+            } else {
+               this.budget.update((Double)this.speed.get(), 1);
+               if ((Boolean)this.netherGuard.get() && this.mc.field_1687.method_27983() == class_1937.field_25180) {
+                  this.sequence.cancel();
+               } else if (!Stealth.handsBusy()) {
+                  if (this.placingAllowed() || (Boolean)this.autoCharge.get() || (Boolean)this.autoDetonate.get()) {
+                     if ((Boolean)this.autoRefill.get()) {
+                        this.refill.tick(class_1802.field_23141, class_1802.field_8801);
+                     }
 
-               if (!this.sequence.isRunning()) {
-                  class_2338 spot = this.findSpot();
-                  if (spot != null) {
-                     if (!(Boolean)this.requireGlowstone.get() || AnchorActions.charges(spot) >= 0 || AnchorActions.findGlowstone().found()) {
-                        this.sequence.start(spot);
-                        this.advance();
+                     this.target = this.findTarget();
+                     if (this.target == null && !(Boolean)this.oneClick.get()) {
+                        this.sequence.cancel();
+                     } else if (!InventoryGuard.offhandInFlight()) {
+                        if (!this.sequence.isRunning()) {
+                           class_2338 spot = this.findSpot();
+                           if (spot != null) {
+                              this.sequence.start(spot);
+                              this.advance(false);
+                           }
+                        } else if (!this.stillWorthIt(this.sequence.pos())) {
+                           class_2338 dropped = this.sequence.pos();
+                           if ((Boolean)this.chatInfo.get() && !Stealth.inView(dropped.method_46558()) && !dropped.equals(this.sightDropped)) {
+                              this.warning("Anchor spot dropped: out of sight - it left Stealth's view-angle.", new Object[0]);
+                              this.sightDropped = dropped;
+                           }
+
+                           this.sequence.cancel();
+                        } else {
+                           boolean worthIt = this.sightings.worth(this.sequence.pos());
+                           this.advance(!worthIt);
+                        }
                      }
                   }
-               } else if (!this.stillWorthIt(this.sequence.pos())) {
-                  this.sequence.cancel();
-               } else {
-                  this.advance();
                }
             }
          }
       }
    }
 
-   private void advance() {
-      boolean mustRotate = ((Boolean)this.rotate.get() || Stealth.legitPlace()) && this.aimMode.get() != AutoAnchor.AimMode.Crosshair;
+   private class_1657 findTarget() {
+      double reach = this.maxTargetDistance.get() > 0.0
+         ? Math.min((Double)this.targetRange.get(), this.reach() + (Double)this.maxTargetDistance.get() + 2.0)
+         : (Double)this.targetRange.get();
+      class_1657 found = TargetUtils.getPlayerTarget(reach, (SortPriority)this.priority.get());
+      if (!TargetUtils.isBadTarget(found, reach)) {
+         return found;
+      } else {
+         return TargetUtils.get(
+               entity -> entity instanceof class_1657 playerx
+                  && playerx != this.mc.field_1724
+                  && RevivedPlayers.isRevived(playerx)
+                  && Friends.get().shouldAttack(playerx)
+                  && EntityUtils.getGameMode(playerx) == class_1934.field_9215
+                  && PlayerUtils.isWithin(playerx, reach),
+               (SortPriority)this.priority.get()
+            ) instanceof class_1657 player
+            ? player
+            : null;
+      }
+   }
+
+   private int blastWindow() {
+      int ping = 0;
+      if (this.mc.method_1562() != null) {
+         class_640 entry = this.mc.method_1562().method_2871(this.mc.field_1724.method_5667());
+         if (entry != null) {
+            ping = entry.method_2959();
+         }
+      }
+
+      return class_3532.method_15340(ping / 50 + 3, 3, 40);
+   }
+
+   private void advance(boolean hold) {
+      boolean mustRotate = this.mustRotate() && !TurnProgress.cameraNeeded();
+      BooleanSupplier ready = () -> this.isActive() && this.budget.canAfford(this.clickCost());
       BooleanSupplier gate = () -> {
-         if (!this.budget.canAfford()) {
+         if (!this.isActive()) {
             return false;
          } else {
-            return !Stealth.claimAction() ? false : this.budget.tryConsume();
+            double cost = this.clickCost();
+            if (!this.budget.canAfford(cost)) {
+               return false;
+            } else if (!Stealth.claimUse()) {
+               return false;
+            } else if (!this.budget.tryConsume(cost)) {
+               return false;
+            } else {
+               this.nextCost = Double.NaN;
+               return true;
+            }
          }
       };
       AnchorActions.Options options = new AnchorActions.Options(
-         mustRotate, (Boolean)this.swing.get(), this.switchMode.get() == AutoAnchor.SwitchMode.Hotbar, 50, gate
-      );
-      AnchorSequence.Step step = this.sequence.step(options, (Integer)this.timeout.get(), this.phases(), (Boolean)this.predictSteps.get());
+            mustRotate, (Boolean)this.swing.get(), this.switchMode.get() == AutoAnchor.SwitchMode.Hotbar, 50, gate
+         )
+         .withOwner(this)
+         .withReady(ready);
+      AnchorSequence.Step step = this.sequence.step(options, (Integer)this.timeout.get(), this.phases(), (Boolean)this.predictSteps.get(), hold);
       if (step == AnchorSequence.Step.Failed && (Boolean)this.chatInfo.get()) {
          this.warning("Anchor spot dropped: %s.", new Object[]{this.sequence.failure()});
       }
+   }
+
+   private double clickCost() {
+      if (Double.isNaN(this.nextCost)) {
+         this.nextCost = Stealth.actionCost();
+      }
+
+      return this.nextCost;
    }
 
    private boolean placingAllowed() {
@@ -407,10 +510,13 @@ public class AutoAnchor extends CrystalModule {
 
    private boolean actionable(class_2338 pos) {
       int charges = AnchorActions.charges(pos);
+      boolean glowstone = AnchorActions.findGlowstone().found();
       if (charges < 0) {
-         return this.placingAllowed();
+         return this.placingAllowed() && AnchorActions.findAnchor().found() && (glowstone || !(Boolean)this.requireGlowstone.get());
       } else {
-         return charges == 0 ? (Boolean)this.autoCharge.get() : (Boolean)this.autoDetonate.get();
+         return charges == 0
+            ? (Boolean)this.autoCharge.get() && glowstone
+            : (Boolean)this.autoDetonate.get() && (!AnchorActions.offhandBlocksDetonation(charges) || (Boolean)this.autoCharge.get() && glowstone);
       }
    }
 
@@ -422,7 +528,9 @@ public class AutoAnchor extends CrystalModule {
          if (pop != null) {
             return pop.anchorMinDamage();
          } else {
-            boolean low = (Boolean)this.facePlace.get() && EntityUtils.getTotalHealth(this.target) <= (Double)this.facePlaceHealth.get();
+            boolean low = (Boolean)this.facePlace.get()
+               && this.target.method_6032() > 0.0F
+               && EntityUtils.getTotalHealth(this.target) <= (Double)this.facePlaceHealth.get();
             return low ? (Double)this.facePlaceMinDamage.get() : (Double)this.minDamage.get();
          }
       }
@@ -448,18 +556,21 @@ public class AutoAnchor extends CrystalModule {
    }
 
    private boolean clickable(class_2338 pos) {
-      return Stealth.legitPlace() && AnchorActions.charges(pos) < 0 ? AnchorActions.placeHit(pos) != null : true;
+      return AnchorActions.charges(pos) >= 0 ? true : AnchorActions.placeHit(pos, this.mustRotate()) != null;
+   }
+
+   private double reach() {
+      return Math.min((Double)this.range.get(), VanillaLimits.blockRange());
+   }
+
+   private boolean mustRotate() {
+      return ((Boolean)this.rotate.get() || Stealth.legitPlace()) && this.aimMode.get() != AutoAnchor.AimMode.Crosshair;
    }
 
    private Double score(class_2338 pos, double required, double selfHealth) {
       class_243 center = pos.method_46558();
-      if (!CrystalUtils.inRange(center, (Double)this.range.get(), (Double)this.wallRange.get())) {
-         return null;
-      } else if (!Stealth.allowsBlock(pos, center)) {
-         return null;
-      } else if (this.aimMode.get() == AutoAnchor.AimMode.Angle && !AimUtils.withinCone(center, (Double)this.maxAngle.get())) {
-         return null;
-      } else if (this.aimMode.get() == AutoAnchor.AimMode.Fov && !AimUtils.inFieldOfView(center, (Double)this.fovMargin.get())) {
+      double distance = this.mc.field_1724.method_33571().method_1022(center);
+      if (distance > this.reach()) {
          return null;
       } else if (this.target != null
          && (Double)this.maxTargetDistance.get() > 0.0
@@ -469,16 +580,24 @@ public class AutoAnchor extends CrystalModule {
          return null;
       } else if (!this.actionable(pos)) {
          return null;
+      } else if (this.aimMode.get() == AutoAnchor.AimMode.Angle && !AimUtils.withinCone(center, (Double)this.maxAngle.get())) {
+         return null;
+      } else if (this.aimMode.get() == AutoAnchor.AimMode.Fov && !AimUtils.inFieldOfView(center, (Double)this.fovMargin.get())) {
+         return null;
+      } else if (distance > Math.min((Double)this.wallRange.get(), this.reach()) && !VanillaLimits.hasLineOfSight(center)) {
+         return null;
+      } else if (!Stealth.allowsBlock(pos, center)) {
+         return null;
       } else {
-         float selfDamage = BlastShield.anchorDamage(this.mc.field_1724, center);
-         if (selfDamage > (Double)this.maxSelfDamage.get() || selfDamage >= selfHealth) {
+         float damage = this.target == null ? 0.0F : BlastShield.anchorDamage(this.target, center);
+         if (this.target != null && damage < required) {
             return null;
-         } else if (this.target == null) {
-            return (double)(-selfDamage);
          } else {
-            float damage = BlastShield.anchorDamage(this.target, center);
-            if (damage < required) {
+            float selfDamage = BlastShield.anchorDamage(this.mc.field_1724, center);
+            if (selfDamage > (Double)this.maxSelfDamage.get() || selfDamage >= selfHealth) {
                return null;
+            } else if (this.target == null) {
+               return (double)(-selfDamage);
             } else {
                PopWindow pop = this.popWindow();
                boolean skipRatio = pop != null && pop.ignoreRatio();
@@ -493,42 +612,52 @@ public class AutoAnchor extends CrystalModule {
    private class_2338 findSpot() {
       double required = this.requiredDamage();
       double selfHealth = EntityUtils.getTotalHealth(this.mc.field_1724);
+      int blastWindow = this.blastWindow();
       if (this.aimMode.get() == AutoAnchor.AimMode.Crosshair) {
-         class_3965 hit = AimUtils.lookingAtBlock((Double)this.range.get());
+         class_3965 hit = AimUtils.lookingAtBlock(this.reach());
          if (hit == null) {
             return null;
          } else {
             class_2338 looking = hit.method_17777();
-            class_2338 spot = AnchorActions.charges(looking) >= 0 ? looking : looking.method_10093(hit.method_17780());
-            return this.score(spot, required, selfHealth) != null && this.clickable(spot) ? spot : null;
+            class_1750 context = new class_1750(this.mc.field_1724, class_1268.field_5808, new class_1799(class_1802.field_23141), hit);
+            class_2338 spot = AnchorActions.charges(looking) >= 0 ? looking : context.method_8037();
+            if (this.sequence.awaitingBlast(spot, blastWindow)) {
+               return null;
+            } else {
+               return this.score(spot, required, selfHealth) != null && this.sightings.pickable(spot) && this.clickable(spot) ? spot : null;
+            }
          }
       } else {
          class_2338 origin = this.mc.field_1724.method_24515();
-         int radius = (int)Math.ceil((Double)this.range.get());
-         class_2338 best = null;
-         double bestScore = Double.NEGATIVE_INFINITY;
-         double bestTargetDistance = Double.MAX_VALUE;
+         int radius = (int)Math.ceil(this.reach());
+         List<AutoAnchor.Candidate> candidates = new ArrayList<>();
 
          for (int x = -radius; x <= radius; x++) {
             for (int y = -radius; y <= radius; y++) {
                for (int z = -radius; z <= radius; z++) {
                   class_2338 pos = origin.method_10069(x, y, z);
-                  Double value = this.score(pos, required, selfHealth);
-                  if (value != null) {
-                     double targetDistance = this.target != null
-                        ? this.target.method_33571().method_1022(pos.method_46558())
-                        : this.mc.field_1724.method_33571().method_1022(pos.method_46558());
-                     if ((value > bestScore || value == bestScore && targetDistance < bestTargetDistance) && this.clickable(pos)) {
-                        bestScore = value;
-                        bestTargetDistance = targetDistance;
-                        best = pos;
+                  if (!this.sequence.awaitingBlast(pos, blastWindow)) {
+                     Double value = this.score(pos, required, selfHealth);
+                     if (value != null && this.sightings.pickable(pos)) {
+                        double targetDistance = this.target != null
+                           ? this.target.method_33571().method_1022(pos.method_46558())
+                           : this.mc.field_1724.method_33571().method_1022(pos.method_46558());
+                        candidates.add(new AutoAnchor.Candidate(pos, value, targetDistance));
                      }
                   }
                }
             }
          }
 
-         return best;
+         candidates.sort(Comparator.comparingDouble(AutoAnchor.Candidate::score).reversed().thenComparingDouble(AutoAnchor.Candidate::targetDistance));
+
+         for (AutoAnchor.Candidate candidate : candidates) {
+            if (this.clickable(candidate.pos())) {
+               return candidate.pos();
+            }
+         }
+
+         return null;
       }
    }
 
@@ -554,6 +683,9 @@ public class AutoAnchor extends CrystalModule {
       Angle,
       Fov,
       Crosshair;
+   }
+
+   private record Candidate(class_2338 pos, double score, double targetDistance) {
    }
 
    public static enum SwitchMode {

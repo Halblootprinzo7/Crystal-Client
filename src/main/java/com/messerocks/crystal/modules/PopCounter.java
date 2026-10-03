@@ -26,13 +26,17 @@ public class PopCounter extends CrystalModule {
             .build()
       );
    private final Map<UUID, Integer> pops = new HashMap<>();
+   private long clearedForVersion = -1L;
 
    public PopCounter() {
       super(CrystalAddon.CATEGORY, "pop-counter", "Counts how many totems each player has popped.");
    }
 
    public void onActivate() {
-      this.pops.clear();
+      if (this.activationVersion() != this.clearedForVersion) {
+         this.clearedForVersion = this.activationVersion();
+         this.pops.clear();
+      }
    }
 
    public int getPops(UUID uuid) {
@@ -43,14 +47,18 @@ public class PopCounter extends CrystalModule {
    private void onPacket(Receive event) {
       if (event.packet instanceof class_2663 packet) {
          if (packet.method_11470() == 35) {
-            if (this.mc.field_1687 != null) {
-               if (packet.method_11469(this.mc.field_1687) instanceof class_1657 player) {
-                  if (player != this.mc.field_1724 || (Boolean)this.countSelf.get()) {
-                     int count = this.pops.merge(player.method_5667(), 1, Integer::sum);
-                     if ((Boolean)this.chat.get()) {
-                        this.info("%s popped %d totem%s.", new Object[]{player.method_5477().getString(), count, count == 1 ? "" : "s"});
-                     }
-                  }
+            this.receiveOnClient(event, () -> this.countPop(packet));
+         }
+      }
+   }
+
+   private void countPop(class_2663 packet) {
+      if (this.mc.field_1687 != null) {
+         if (packet.method_11469(this.mc.field_1687) instanceof class_1657 player) {
+            if (player != this.mc.field_1724 || (Boolean)this.countSelf.get()) {
+               int count = this.pops.merge(player.method_5667(), 1, Integer::sum);
+               if ((Boolean)this.chat.get()) {
+                  this.info("%s popped %d totem%s.", new Object[]{player.method_5477().getString(), count, count == 1 ? "" : "s"});
                }
             }
          }

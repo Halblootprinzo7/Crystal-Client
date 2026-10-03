@@ -16,7 +16,20 @@ public final class DamageWindow {
       return target != null && target.field_6235 <= 0;
    }
 
+   public static DamageWindow.Judgement judge(int ownHitAgo, int echoTicks, boolean targetHurt, float ownDamage) {
+      if (ownHitAgo >= 0 && ownHitAgo < 10) {
+         return new DamageWindow.Judgement(ownDamage, false);
+      } else {
+         boolean echoOfOurs = ownHitAgo >= 0 && ownHitAgo < 10 + echoTicks;
+         return !echoOfOurs && targetHurt ? new DamageWindow.Judgement(0.0F, true) : DamageWindow.Judgement.OPEN;
+      }
+   }
+
    public static int ticksUntilOpen(class_1309 target) {
       return target == null ? 0 : Math.max(0, target.field_6235);
+   }
+
+   public record Judgement(float floor, boolean hold) {
+      static final DamageWindow.Judgement OPEN = new DamageWindow.Judgement(0.0F, false);
    }
 }
