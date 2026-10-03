@@ -2,6 +2,7 @@ package com.messerocks.crystal.modules;
 
 import com.messerocks.crystal.CrystalAddon;
 import com.messerocks.crystal.CrystalModule;
+import com.messerocks.crystal.utils.HumanSwap;
 import com.messerocks.crystal.utils.LegitPlace;
 import com.messerocks.crystal.utils.TurnProgress;
 import com.messerocks.crystal.utils.VanillaLimits;
@@ -149,6 +150,9 @@ public class SwordPlace extends CrystalModule {
    private boolean wasPressed;
    private int lockout;
    private int pending;
+   // Human mode: the slot to go back to once this press is done, when we switched to obsidian for it.
+   private int humanReturn = -1;
+   private static final int SWAP_PRIORITY = 100;
    private class_2338 previewPos;
    private class_2338 lastPlaced;
 
@@ -162,6 +166,7 @@ public class SwordPlace extends CrystalModule {
       this.pending = 0;
       this.previewPos = null;
       this.turn.reset(TURN_OWNER);
+      this.finishHumanPress();
    }
 
    @EventHandler
@@ -183,10 +188,12 @@ public class SwordPlace extends CrystalModule {
             // Nothing placeable under the crosshair any more: drop the press rather than firing it later
             // somewhere you have since looked at.
             this.pending = 0;
+            this.finishHumanPress();
          } else {
             this.previewPos = target;
             if (this.pending > 0 && this.lockout == 0 && this.place(target)) {
                this.pending = 0;
+               this.finishHumanPress();
                this.lockout = (Integer)this.cooldown.get();
                this.lastPlaced = target;
                if ((Boolean)this.debug.get()) {
@@ -205,11 +212,42 @@ public class SwordPlace extends CrystalModule {
    private void expirePress() {
       if (this.pending > 0) {
          this.pending--;
+         if (this.pending == 0) {
+            this.finishHumanPress();
+         }
+      }
+   }
+
+   // Back to the weapon after a press we switched for, a tick after the click like a hand would.
+   private void finishHumanPress() {
+      if (this.humanReturn != -1) {
+         if (this.switchMode.get() == SwordPlace.SwitchMode.SwapBack) {
+            HumanSwap.returnLater(this.humanReturn);
+         }
+
+         this.humanReturn = -1;
       }
    }
 
    private boolean weaponInHand() {
-      return !(Boolean)this.onlyWithWeapon.get() || this.isWeapon(this.mc.field_1724.method_6047());
+      return !(Boolean)this.onlyWithWeapon.get()
+         || this.isWeapon(this.mc.field_1724.method_6047())
+         || this.humanReturn != -1 && this.mc.field_1724.method_6047().method_31574(class_1802.field_8281);
+   }
+
+   // Human mode: obsidian is only placed once it has been in hand for a full tick. Starts the switch.
+   private boolean obsidianInHand() {
+      FindItemResult obsidian = InvUtils.findInHotbar(new class_1792[]{class_1802.field_8281});
+      if (obsidian.getHand() == class_1268.field_5810) {
+         return true;
+      } else {
+         int selected = this.mc.field_1724.method_31548().method_67532();
+         if (obsidian.slot() != selected && this.humanReturn == -1) {
+            this.humanReturn = selected;
+         }
+
+         return HumanSwap.ready(obsidian.slot(), SWAP_PRIORITY);
+      }
    }
 
    // Where obsidian would land for this crosshair hit, or null. Blocks that react to a click are left alone:
@@ -232,7 +270,9 @@ public class SwordPlace extends CrystalModule {
       if (!InvUtils.findInHotbar(new class_1792[]{class_1802.field_8281}).found()) {
          this.pending = 0;
          return false;
-      } else if (Stealth.legitPlace() && this.headElsewhere()) {
+      } else if (Stealth.humanMode() && !this.obsidianInHand()) {
+         return false;
+      } else if ((Stealth.legitPlace() || Stealth.humanMode()) && this.headElsewhere()) {
          // A rotation module still holds the head somewhere else on the server. Clicking now would not line up
          // with what the server thinks you look at, so turn back to the crosshair first and click from there.
          double yaw = this.mc.field_1724.method_36454();

@@ -6,6 +6,7 @@ import com.messerocks.crystal.utils.ActionBudget;
 import com.messerocks.crystal.utils.AimUtils;
 import com.messerocks.crystal.utils.AnchorActions;
 import com.messerocks.crystal.utils.BlastShield;
+import com.messerocks.crystal.utils.HumanSwap;
 import com.messerocks.crystal.utils.LegitPlace;
 import com.messerocks.crystal.utils.VanillaLimits;
 import java.util.ArrayList;
@@ -395,6 +396,7 @@ public class AnchorMacro extends CrystalModule {
       );
    // Above the auras (50): a key press takes the shared head rotation over instead of waiting for Auto Crystal to let go.
    private static final int MACRO_ROTATION_PRIORITY = 100;
+   private static final int SWAP_PRIORITY = 100;
    private final ActionBudget budget = new ActionBudget();
    private final ActionBudget speedLimit = new ActionBudget();
    private final ActionBudget placeLimit = new ActionBudget();
@@ -503,10 +505,14 @@ public class AnchorMacro extends CrystalModule {
          if (this.mc.field_1724 == null) {
             this.returnSlot = -1;
          } else {
-            if (this.switchMode.get() == AnchorMacro.SwitchMode.Hotbar
+            if (this.visibleSwaps()
                && (Boolean)this.restoreSlot.get()
                && this.returnSlot != this.mc.field_1724.method_31548().method_67532()) {
-               InvUtils.swap(this.returnSlot, false);
+               if (Stealth.humanMode()) {
+                  HumanSwap.returnLater(this.returnSlot);
+               } else {
+                  InvUtils.swap(this.returnSlot, false);
+               }
             }
 
             this.returnSlot = -1;
@@ -655,6 +661,10 @@ public class AnchorMacro extends CrystalModule {
                      return;
                   }
 
+                  if (!this.inHand(AnchorActions.findAnchor())) {
+                     return;
+                  }
+
                   if (!AnchorActions.place(spot, this.options(this.placeLimit))) {
                      return;
                   }
@@ -675,6 +685,10 @@ public class AnchorMacro extends CrystalModule {
                      }
 
                      this.finish();
+                     return;
+                  }
+
+                  if (!this.inHand(AnchorActions.findGlowstone())) {
                      return;
                   }
 
@@ -720,7 +734,12 @@ public class AnchorMacro extends CrystalModule {
                      return;
                   }
 
-                  if (!AnchorActions.detonate(spot, charges, this.options(this.explodeLimit), this.returnSlot)) {
+                  int detonator = AnchorActions.findDetonationSlot(this.returnSlot);
+                  if (Stealth.humanMode() && !HumanSwap.ready(detonator, SWAP_PRIORITY)) {
+                     return;
+                  }
+
+                  if (!AnchorActions.detonate(spot, charges, this.options(this.explodeLimit), detonator)) {
                      return;
                   }
 
@@ -749,7 +768,23 @@ public class AnchorMacro extends CrystalModule {
 
    private int cycleTimeout() {
       double cap = Stealth.turnCap();
-      return cap <= 0.0 ? (Integer)this.timeout.get() : (Integer)this.timeout.get() + (int)Math.ceil(180.0 / cap) * 4;
+      // Human mode spends up to two ticks per step on an honest hotbar switch.
+      int switching = Stealth.humanMode() ? 8 : 0;
+      return cap <= 0.0 ? (Integer)this.timeout.get() + switching : (Integer)this.timeout.get() + (int)Math.ceil(180.0 / cap) * 4 + switching;
+   }
+
+   // Silent swaps select, click and select back inside one tick, which no hand does. Human mode switches for real.
+   private boolean visibleSwaps() {
+      return this.switchMode.get() == AnchorMacro.SwitchMode.Hotbar || Stealth.humanMode();
+   }
+
+   // Human mode: an item is only used once it has been in hand for a full tick. Starts the switch if needed.
+   private boolean inHand(FindItemResult item) {
+      if (!Stealth.humanMode() || !item.found() || item.getHand() == class_1268.field_5810) {
+         return true;
+      } else {
+         return HumanSwap.ready(item.slot(), SWAP_PRIORITY);
+      }
    }
 
    private AnchorActions.Options options() {
@@ -757,7 +792,7 @@ public class AnchorMacro extends CrystalModule {
    }
 
    private AnchorActions.Options options(ActionBudget extra) {
-      boolean mustRotate = (Boolean)this.rotate.get() || Stealth.legitPlace();
+      boolean mustRotate = (Boolean)this.rotate.get() || Stealth.legitPlace() || Stealth.humanMode();
       BooleanSupplier gate = () -> {
          double cost = Stealth.actionCost();
          if (extra != null && !extra.canAfford(cost)) {
@@ -771,7 +806,7 @@ public class AnchorMacro extends CrystalModule {
          }
       };
       return new AnchorActions.Options(
-         mustRotate, (Boolean)this.swing.get(), this.switchMode.get() == AnchorMacro.SwitchMode.Hotbar, MACRO_ROTATION_PRIORITY, gate
+         mustRotate, (Boolean)this.swing.get(), this.visibleSwaps(), MACRO_ROTATION_PRIORITY, gate
       );
    }
 
@@ -809,11 +844,11 @@ public class AnchorMacro extends CrystalModule {
             } else {
                class_3965 support = this.supportFor(spot, anchorPos);
                if (support != null) {
-                  if (this.switchMode.get() == AnchorMacro.SwitchMode.Hotbar) {
+                  if (this.visibleSwaps()) {
                      this.rememberSlot();
                   }
 
-                  if (!AnchorActions.clickWith(support, block, this.options())) {
+                  if (!this.inHand(block) || !AnchorActions.clickWith(support, block, this.options())) {
                      return AnchorMacro.ShieldStep.Turning;
                   } else {
                      if ((Boolean)this.debug.get()) {

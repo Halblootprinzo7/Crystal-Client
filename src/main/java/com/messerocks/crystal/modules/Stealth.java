@@ -2,6 +2,8 @@ package com.messerocks.crystal.modules;
 
 import com.messerocks.crystal.CrystalAddon;
 import com.messerocks.crystal.CrystalModule;
+import com.messerocks.crystal.utils.AimUtils;
+import com.messerocks.crystal.utils.HumanSwap;
 import com.messerocks.crystal.utils.TurnProgress;
 import com.messerocks.crystal.utils.VanillaLimits;
 import meteordevelopment.meteorclient.events.world.TickEvent.Pre;
@@ -18,6 +20,7 @@ import net.minecraft.class_243;
 public class Stealth extends CrystalModule {
    private final SettingGroup sgLimits = this.settings.getDefaultGroup();
    private final SettingGroup sgPacing = this.settings.createGroup("Pacing");
+   private final SettingGroup sgHuman = this.settings.createGroup("Human");
    private final Setting<Boolean> serverReach = this.sgLimits
       .add(
          ((Builder)((Builder)((Builder)new Builder().name("server-reach"))
@@ -104,8 +107,44 @@ public class Stealth extends CrystalModule {
                .defaultValue(true))
             .build()
       );
+   private final Setting<Boolean> humanMode = this.sgHuman
+      .add(
+         ((Builder)((Builder)((Builder)new Builder().name("human-mode"))
+                  .description(
+                     "Auto Crystal, the anchor macro and Sword Place may only do what a hand on a mouse and keyboard can: a hotbar switch that stands for a full tick before the item is used and another tick before switching back (no silent swaps), always looking at what they click, and a reaction time before Auto Crystal acts on anything new. Every Crystal module gets one click per tick between them all and only acts on what is in front of you. Slower, by design."
+                  ))
+               .defaultValue(true))
+            .build()
+      );
+   private final Setting<Integer> reactionTime = this.sgHuman
+      .add(
+         new meteordevelopment.meteorclient.settings.IntSetting.Builder()
+            .name("reaction-time")
+            .description(
+               "Milliseconds before an automatic module acts on something new: a target that walks into range, a crystal that appears, a spot that opens up. Varied by timing-jitter. Spots you keep using are already known and wait for nothing. Key-driven modules are not delayed - the key press is your own reaction."
+            )
+            .defaultValue(150)
+            .min(0)
+            .sliderRange(0, 400)
+            .visible(this.humanMode::get)
+            .build()
+      );
+   private final Setting<Double> viewAngle = this.sgHuman
+      .add(
+         new meteordevelopment.meteorclient.settings.DoubleSetting.Builder()
+            .name("view-angle")
+            .description(
+               "Only act on what lies within this many degrees of where you are looking. 90 is everything in front of you; anything further means turning around for it."
+            )
+            .defaultValue(90.0)
+            .min(10.0)
+            .sliderRange(30.0, 180.0)
+            .visible(this.humanMode::get)
+            .build()
+      );
    private double budget;
    private long lastRefill;
+   private int lastClickTick = -1;
 
    public Stealth() {
       super(CrystalAddon.CATEGORY, "stealth", "Shared behaviour limits the other Crystal modules obey.");
@@ -129,10 +168,18 @@ public class Stealth extends CrystalModule {
    }
 
    @EventHandler(
+      priority = EventPriority.HIGHEST
+   )
+   private void onTickFirst(Pre event) {
+      HumanSwap.observe();
+   }
+
+   @EventHandler(
       priority = EventPriority.LOWEST
    )
    private void onTickLast(Pre event) {
       TurnProgress.SHARED.easeBack();
+      HumanSwap.tickReturn();
    }
 
    private static Stealth get() {
@@ -144,6 +191,8 @@ public class Stealth extends CrystalModule {
       Stealth stealth = get();
       if (stealth == null) {
          return true;
+      } else if (!stealth.inView(point)) {
+         return false;
       } else {
          return stealth.serverReach.get() && !VanillaLimits.canReachBlock(pos)
             ? false
@@ -155,10 +204,31 @@ public class Stealth extends CrystalModule {
       Stealth stealth = get();
       if (stealth == null) {
          return true;
+      } else if (!stealth.inView(entity.method_5829().method_1005())) {
+         return false;
       } else {
          return stealth.serverReach.get() && !VanillaLimits.canReachEntity(entity)
             ? false
             : !(Boolean)stealth.lineOfSight.get() || VanillaLimits.hasLineOfSight(entity.method_33571());
+      }
+   }
+
+   private boolean inView(class_243 point) {
+      return !(Boolean)this.humanMode.get() || AimUtils.withinCone(point, (Double)this.viewAngle.get());
+   }
+
+   public static boolean humanMode() {
+      Stealth stealth = get();
+      return stealth != null && (Boolean)stealth.humanMode.get();
+   }
+
+   // The reaction time for one new thing, already varied by timing-jitter. 0 outside human mode.
+   public static long reactionNanos() {
+      Stealth stealth = get();
+      if (stealth != null && (Boolean)stealth.humanMode.get() && (Integer)stealth.reactionTime.get() > 0) {
+         return (long)((Integer)stealth.reactionTime.get() * actionCost() * 1000000.0);
+      } else {
+         return 0L;
       }
    }
 
@@ -198,14 +268,22 @@ public class Stealth extends CrystalModule {
          return true;
       } else if ((Boolean)stealth.pauseInScreens.get() && stealth.mc.field_1755 != null) {
          return false;
+      } else if ((Boolean)stealth.humanMode.get() && stealth.mc.field_1724 != null && stealth.lastClickTick == stealth.mc.field_1724.field_6012) {
+         return false;
       } else if (VanillaLimits.roll((Double)stealth.skipChance.get())) {
          return false;
-      } else if ((Double)stealth.globalRate.get() <= 0.0) {
-         return true;
-      } else if (stealth.budget < 1.0) {
+      } else if ((Double)stealth.globalRate.get() > 0.0 && stealth.budget < 1.0) {
          return false;
       } else {
-         stealth.budget--;
+         if ((Double)stealth.globalRate.get() > 0.0) {
+            stealth.budget--;
+         }
+
+         if ((Boolean)stealth.humanMode.get() && stealth.mc.field_1724 != null) {
+            stealth.lastClickTick = stealth.mc.field_1724.field_6012;
+            HumanSwap.used();
+         }
+
          return true;
       }
    }
