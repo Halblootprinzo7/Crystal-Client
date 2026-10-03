@@ -55,8 +55,11 @@ public final class AnchorActions {
    private AnchorActions() {
    }
 
+   // Ticks between two clicks of an anchor cycle. One: a hotbar switch already takes a tick of its own between two
+   // clicks that need different items, so place - switch - charge - switch - detonate is five ticks, which is what a
+   // quick hand does. The old two-to-four on top of that made a cycle take most of a second.
    public static int stepGap() {
-      return Math.max(2, Stealth.pace(3));
+      return Math.max(1, Stealth.pace(1));
    }
 
    public static int charges(class_2338 pos) {

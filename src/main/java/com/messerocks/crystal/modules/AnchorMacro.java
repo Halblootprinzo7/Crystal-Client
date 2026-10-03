@@ -1,5 +1,6 @@
 package com.messerocks.crystal.modules;
 
+import com.messerocks.crystal.utils.KeyPriority;
 import com.messerocks.crystal.CrystalAddon;
 import com.messerocks.crystal.CrystalModule;
 import com.messerocks.crystal.utils.ActionBudget;
@@ -112,9 +113,9 @@ public class AnchorMacro extends CrystalModule {
          ((meteordevelopment.meteorclient.settings.DoubleSetting.Builder)((meteordevelopment.meteorclient.settings.DoubleSetting.Builder)new meteordevelopment.meteorclient.settings.DoubleSetting.Builder()
                   .name("speed"))
                .description(
-                  "Clicks per second across the whole cycle - placing, charging, shielding and detonating all draw from this, at an irregular spacing. Applies to a single press too, not just a held key. Two clicks of the macro are at least two ticks apart regardless."
+                  "Clicks per second across the whole cycle - placing, charging, shielding and detonating all draw from this, at an irregular spacing. Applies to a single press too, not just a held key. Two clicks of the macro are at least one tick apart regardless."
                ))
-            .defaultValue(8.0)
+            .defaultValue(20.0)
             .range(1.0, 20.0)
             .sliderRange(1.0, 20.0)
             .build()
@@ -537,6 +538,7 @@ public class AnchorMacro extends CrystalModule {
                this.placeLimit.update((Double)this.placeSpeed.get(), 1);
                this.explodeLimit.update((Double)this.explodeSpeed.get(), 1);
                if (this.working != null) {
+                  KeyPriority.hold();
                   // A press during a running cycle starts the next one once this cycle is done, instead of being lost.
                   if (justPressed && this.trigger.get() == AnchorMacro.Trigger.Press) {
                      this.pressQueued = true;
@@ -963,7 +965,7 @@ public class AnchorMacro extends CrystalModule {
 
                         // Detonate only once the shield had time to be confirmed; the client shows it the moment the
                         // click goes out, whether the server accepts it or not.
-                        if (this.shieldAge++ < Math.max(1, this.predictionWindow() - 2)) {
+                        if (this.shieldAge++ < Math.max(1, this.predictionWindow() - 3)) {
                            return;
                         }
                      }
@@ -1027,6 +1029,10 @@ public class AnchorMacro extends CrystalModule {
    }
 
    private void finish() {
+      if (this.working != null) {
+         KeyPriority.release();
+      }
+
       this.unsafeWarned = false;
       this.working = null;
       this.predicted = null;

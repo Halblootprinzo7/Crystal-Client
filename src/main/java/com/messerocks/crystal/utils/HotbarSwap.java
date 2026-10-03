@@ -120,12 +120,22 @@ public final class HotbarSwap {
    }
 
    public void back() {
+      this.back(Stealth.paceAtLeast(2, 4));
+   }
+
+   // Straight back on the next tick that allows a switch. For a borrowed item whose one job is done (Sword Place's
+   // obsidian after its click): leaving it in hand only delays whatever comes next, like the crystal on that block.
+   public void backSoon() {
+      this.back(1);
+   }
+
+   private void back(int quiet) {
       if (this.swapped && mc.field_1724 != null) {
          pendingFrom = this.from;
          pendingTo = mc.field_1724.method_31548().method_67532();
          pendingOthersPrevious = this.othersPrevious;
          quietTicks = 0;
-         quietNeeded = Stealth.paceAtLeast(2, 4);
+         quietNeeded = quiet;
       }
    }
 

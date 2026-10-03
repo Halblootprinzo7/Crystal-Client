@@ -2,6 +2,10 @@ package com.messerocks.crystal.modules;
 
 import com.messerocks.crystal.CrystalAddon;
 import com.messerocks.crystal.CrystalModule;
+import net.minecraft.class_2246;
+import net.minecraft.class_2885;
+import meteordevelopment.meteorclient.events.packets.PacketEvent.Send;
+import com.messerocks.crystal.utils.KeyPriority;
 import com.messerocks.crystal.utils.ActionBudget;
 import com.messerocks.crystal.utils.AimUtils;
 import com.messerocks.crystal.utils.BlastShield;
@@ -530,6 +534,8 @@ public class AutoCrystal extends CrystalModule {
    private final AutoCrystal.CrystalsSeen<class_2338> crystalsSeen = new AutoCrystal.CrystalsSeen<>();
    private final AutoCrystal.WorthMemory worth = new AutoCrystal.WorthMemory();
    private final Map<class_2338, Integer> hitBases = new HashMap<>();
+   private final Map<class_2338, Integer> ownBases = new HashMap<>();
+   private static final int OWN_BASE_TICKS = 40;
    private final Map<Integer, AutoCrystal.SeenHealth> seenHealth = new HashMap<>();
    private int clientTicks;
    private final Predicate<class_1297> goneWhenPlanned = entity -> entity instanceof class_1511
@@ -564,6 +570,7 @@ public class AutoCrystal extends CrystalModule {
       this.crystalsSeen.clear();
       this.worth.clear();
       this.hitBases.clear();
+      this.ownBases.clear();
       this.seenHealth.clear();
       this.loggedState = null;
       this.candidateState = null;
@@ -638,6 +645,7 @@ public class AutoCrystal extends CrystalModule {
          }
 
          this.clientTicks++;
+         this.ownBases.values().removeIf(at -> this.clientTicks - at > OWN_BASE_TICKS);
          this.reactions.tick();
          this.settleWorth();
          this.noteWeakness();
@@ -786,7 +794,9 @@ public class AutoCrystal extends CrystalModule {
    }
 
    private String busyReason() {
-      if (this.mc.field_1724.method_5765()) {
+      if (KeyPriority.active()) {
+         return "a key-driven module is at work";
+      } else if (this.mc.field_1724.method_5765()) {
          return "riding";
       } else if (this.mc.field_1724.method_6115()) {
          return "using an item";
@@ -859,7 +869,29 @@ public class AutoCrystal extends CrystalModule {
    }
 
    private boolean spotReady(class_2338 base) {
-      return this.reactions.ready(base);
+      // Obsidian you just placed yourself is no surprise to react to: you put it there to crystal it.
+      Integer placedAt = this.ownBases.get(base);
+      return placedAt != null && this.clientTicks - placedAt <= OWN_BASE_TICKS ? true : this.reactions.ready(base);
+   }
+
+   // Obsidian placed by this client - by hand, Sword Place or any other module. Read off the outgoing click: by the
+   // time the packet is built the client has already predicted the block into the world.
+   @EventHandler
+   private void onClickSent(Send event) {
+      if (event.packet instanceof class_2885 click && this.mc.field_1724 != null && this.mc.field_1687 != null) {
+         class_1799 stack = this.mc.field_1724.method_5998(click.method_12546());
+         if (stack.method_7960() || stack.method_31574(class_1802.field_8281)) {
+            class_3965 hit = click.method_12543();
+            class_2338 clicked = hit.method_17777().method_10062();
+            class_2338 beside = clicked.method_10093(hit.method_17780());
+            for (class_2338 pos : new class_2338[]{beside, clicked}) {
+               if (this.mc.field_1687.method_8320(pos).method_27852(class_2246.field_10540)) {
+                  this.ownBases.put(pos, this.clientTicks);
+                  break;
+               }
+            }
+         }
+      }
    }
 
    private void noteHealth(class_1657 player) {
