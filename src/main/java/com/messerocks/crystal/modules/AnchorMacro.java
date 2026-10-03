@@ -21,6 +21,8 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.function.BooleanSupplier;
 import meteordevelopment.meteorclient.events.packets.PacketEvent.Sent;
+import meteordevelopment.meteorclient.events.meteor.KeyEvent;
+import meteordevelopment.meteorclient.events.meteor.MouseClickEvent;
 import meteordevelopment.meteorclient.events.render.Render3DEvent;
 import meteordevelopment.meteorclient.events.world.TickEvent.Pre;
 import meteordevelopment.meteorclient.renderer.ShapeMode;
@@ -30,6 +32,7 @@ import meteordevelopment.meteorclient.settings.KeybindSetting.Builder;
 import meteordevelopment.meteorclient.utils.entity.EntityUtils;
 import meteordevelopment.meteorclient.utils.entity.SortPriority;
 import meteordevelopment.meteorclient.utils.misc.Keybind;
+import meteordevelopment.meteorclient.utils.misc.input.KeyAction;
 import meteordevelopment.meteorclient.utils.player.InvUtils;
 import meteordevelopment.meteorclient.utils.render.color.Color;
 import meteordevelopment.meteorclient.utils.render.color.SettingColor;
@@ -400,6 +403,8 @@ public class AnchorMacro extends CrystalModule {
                .visible(this.render::get))
             .build()
       );
+   // A press seen as a key event: polling the key once per tick misses a tap that goes down and up between ticks.
+   private boolean pressLatched;
    private static final int MACRO_ROTATION_PRIORITY = 90;
    private final ActionBudget budget = new ActionBudget();
    private final ActionBudget speedLimit = new ActionBudget();
@@ -433,6 +438,8 @@ public class AnchorMacro extends CrystalModule {
    private boolean lastShieldDiagonal;
    private class_2338 shieldAssumed;
    private boolean shieldDone;
+   private int shieldAge;
+   private boolean unsafeWarned;
    private String lastRejection;
    private class_2338 shieldPlaced;
    private boolean sneakWarned;
@@ -502,12 +509,14 @@ public class AnchorMacro extends CrystalModule {
             this.noteAnchors();
             if (this.mc.field_1755 != null) {
                this.wasPressed = false;
+               this.pressLatched = false;
                this.shieldKeyWasPressed = false;
                this.pressQueued = false;
                this.heldWarnings.clear();
             } else {
                boolean pressed = ((Keybind)this.bind.get()).isPressed();
-               boolean justPressed = pressed && !this.wasPressed;
+               boolean justPressed = pressed && !this.wasPressed || this.pressLatched;
+               this.pressLatched = false;
                this.wasPressed = pressed;
                if (!pressed) {
                   this.heldWarnings.clear();
@@ -528,6 +537,11 @@ public class AnchorMacro extends CrystalModule {
                this.placeLimit.update((Double)this.placeSpeed.get(), 1);
                this.explodeLimit.update((Double)this.explodeSpeed.get(), 1);
                if (this.working != null) {
+                  // A press during a running cycle starts the next one once this cycle is done, instead of being lost.
+                  if (justPressed && this.trigger.get() == AnchorMacro.Trigger.Press) {
+                     this.pressQueued = true;
+                  }
+
                   this.runAt(this.working);
                } else {
                   boolean start = this.trigger.get() == AnchorMacro.Trigger.Hold ? pressed : justPressed || this.pressQueued;
@@ -580,6 +594,20 @@ public class AnchorMacro extends CrystalModule {
                }
             }
          }
+      }
+   }
+
+   @EventHandler
+   private void onKey(KeyEvent event) {
+      if (event.action == KeyAction.Press && this.mc.field_1755 == null && ((Keybind)this.bind.get()).matches(event.input)) {
+         this.pressLatched = true;
+      }
+   }
+
+   @EventHandler
+   private void onMouse(MouseClickEvent event) {
+      if (event.action == KeyAction.Press && this.mc.field_1755 == null && ((Keybind)this.bind.get()).matches(event.input)) {
+         this.pressLatched = true;
       }
    }
 
@@ -804,7 +832,11 @@ public class AnchorMacro extends CrystalModule {
 
       if (!unnoticed && !offhandBusy && !outOfSight) {
          String unsafe = this.unsafeEvenShielded(spot);
-         if (unsafe != null) {
+         if (unsafe != null && this.worldStateAt(spot) != AnchorMacro.AnchorState.Air) {
+            // The anchor already stands: stopping now would leave it - charged, perhaps - right next to you. Wait for
+            // the spot to become safe again (you step back, the shield goes up); the cycle timeout still ends it.
+            this.waitUnsafe(unsafe);
+         } else if (unsafe != null) {
             if ((Boolean)this.chatInfo.get()) {
                this.report("Cycle stopped by safe-anchor: %s.", unsafe);
             }
@@ -849,6 +881,17 @@ public class AnchorMacro extends CrystalModule {
                                  ? "Nothing to click that puts an anchor at %s from where you stand."
                                  : "Your view does not land on anything that puts an anchor at %s - look at it, or turn rotate on.",
                               format(spot)
+                           );
+                        }
+
+                        this.finish();
+                        return;
+                     }
+
+                     if (!AnchorActions.canGrip(class_1802.field_23141, AnchorActions.placeHit(spot, this.mustRotate()))) {
+                        if ((Boolean)this.chatInfo.get()) {
+                           this.report(
+                              "The anchor is only in your offhand, and the item in your main hand would take the click - put an anchor in the hotbar or empty your main hand."
                            );
                         }
 
@@ -908,13 +951,26 @@ public class AnchorMacro extends CrystalModule {
                         }
                      }
 
-                     String blast = this.safetyProblem(spot);
-                     if (blast != null) {
-                        if ((Boolean)this.chatInfo.get()) {
-                           this.report("Cycle stopped by safe-anchor: %s.", blast);
+                     if (this.shieldDone && this.shieldAssumed != null) {
+                        if (!this.shieldStands()) {
+                           // The server refused the shield (or it was broken): place it again rather than detonating
+                           // as if it stood.
+                           this.shieldDone = false;
+                           this.shieldAssumed = null;
+                           this.shieldPlaced = null;
+                           return;
                         }
 
-                        this.finish();
+                        // Detonate only once the shield had time to be confirmed; the client shows it the moment the
+                        // click goes out, whether the server accepts it or not.
+                        if (this.shieldAge++ < Math.max(1, this.predictionWindow() - 2)) {
+                           return;
+                        }
+                     }
+
+                     String blast = this.safetyProblem(spot);
+                     if (blast != null) {
+                        this.waitUnsafe(blast);
                         return;
                      }
 
@@ -953,6 +1009,14 @@ public class AnchorMacro extends CrystalModule {
       }
    }
 
+   private void waitUnsafe(String why) {
+      if (!this.unsafeWarned && ((Boolean)this.chatInfo.get() || (Boolean)this.debug.get())) {
+         this.report("Holding the anchor at %s until it is safe: %s.", format(this.working), why);
+      }
+
+      this.unsafeWarned = true;
+   }
+
    private int detonationPreference() {
       if (this.returnSlot == -1) {
          return -1;
@@ -963,6 +1027,7 @@ public class AnchorMacro extends CrystalModule {
    }
 
    private void finish() {
+      this.unsafeWarned = false;
       this.working = null;
       this.predicted = null;
       this.predictedAge = 0;
@@ -1136,6 +1201,7 @@ public class AnchorMacro extends CrystalModule {
                         this.shieldAssumed = spot;
                         this.shieldPlaced = spot;
                         this.shieldDone = true;
+                        this.shieldAge = 0;
                      }
                   );
                   if (!AnchorActions.clickWith(support, item, shieldOptions)) {
@@ -1372,6 +1438,11 @@ public class AnchorMacro extends CrystalModule {
       this.lastShieldProblem = "no candidate position";
       if (!(Boolean)this.shield.get()) {
          return null;
+      } else if (!this.shieldItemAvailable(anchorPos)) {
+         // A spot that is only safe behind a shield must not be approved when there is nothing to build the shield
+         // from - the cycle would place and charge the anchor and then have to leave it standing.
+         this.lastShieldProblem = String.format("no %s left for the shield", ((AnchorMacro.ShieldBlock)this.shieldBlock.get()).item().toString());
+         return null;
       } else {
          List<class_2338> candidates = this.shieldPositions(anchorPos);
          if (candidates.isEmpty()) {
@@ -1439,6 +1510,23 @@ public class AnchorMacro extends CrystalModule {
       }
    }
 
+   // Enough of the shield item in the hotbar or offhand. A glowstone shield on an anchor that still needs its charge
+   // needs two: one for the charge, one for the shield.
+   private boolean shieldItemAvailable(class_2338 anchorPos) {
+      class_1792 item = ((AnchorMacro.ShieldBlock)this.shieldBlock.get()).item();
+      int count = this.mc.field_1724.method_6079().method_31574(item) ? this.mc.field_1724.method_6079().method_7947() : 0;
+
+      for (int i = 0; i <= 8; i++) {
+         class_1799 stack = this.mc.field_1724.method_31548().method_5438(i);
+         if (stack.method_31574(item)) {
+            count += stack.method_7947();
+         }
+      }
+
+      int needed = item == class_1802.field_8801 && AnchorActions.charges(anchorPos) <= 0 ? 2 : 1;
+      return count >= needed;
+   }
+
    private class_2338 effectiveShield() {
       return this.shieldStands() ? this.shieldPlaced : null;
    }
@@ -1486,6 +1574,13 @@ public class AnchorMacro extends CrystalModule {
             } else if (AnchorActions.charges(spot) < 0 && !AnchorActions.canPlace(spot)) {
                return String.format(
                   "Cannot put an anchor at %d %d %d - blocked, or nothing to click against.", spot.method_10263(), spot.method_10264(), spot.method_10260()
+               );
+            } else if (AnchorActions.charges(spot) < 0 && AnchorActions.placeHit(spot, this.mustRotate()) == null) {
+               return String.format(
+                  "No face to click that puts an anchor at %d %d %d from where you stand - something is in the way of the click.",
+                  spot.method_10263(),
+                  spot.method_10264(),
+                  spot.method_10260()
                );
             } else if (this.blastPending(spot)) {
                return "The anchor you just set off has not gone yet on your screen - waiting for the server.";

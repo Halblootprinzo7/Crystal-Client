@@ -387,6 +387,12 @@ public final class AnchorActions {
       }
    }
 
+   // Whether item can actually be used for this click: in the main hand, in the hotbar, or in the offhand with a main
+   // hand that would not take the click itself.
+   public static boolean canGrip(class_1792 item, class_3965 hit) {
+      return gripFor(item, hit) != null;
+   }
+
    private static AnchorActions.Grip gripFor(class_1792 item, class_3965 hit) {
       if (mc.field_1724 == null) {
          return null;

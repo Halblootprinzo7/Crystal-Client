@@ -22,6 +22,13 @@ public final class BlastShield {
    }
 
    public static RaycastFactory factory(class_2338 airAt, class_2338 shieldPos, class_2680 shieldState) {
+      return factory(airAt, shieldPos, shieldState, false);
+   }
+
+   // allCover: every block with a collision shape stops a ray, as in vanilla, where an explosion damages entities
+   // before it destroys blocks. Without it, blocks below obsidian's blast resistance count as air - right for crystal
+   // spam, where earlier blasts have already cleared them, wrong for a single anchor.
+   public static RaycastFactory factory(class_2338 airAt, class_2338 shieldPos, class_2680 shieldState, boolean allCover) {
       return (context, blockPos) -> {
          if (blockPos.equals(airAt)) {
             return null;
@@ -31,7 +38,7 @@ public final class BlastShield {
                state = shieldState;
             } else {
                state = mc.field_1687.method_8320(blockPos);
-               if (state.method_26204().method_9520() < 600.0F) {
+               if (!allCover && state.method_26204().method_9520() < 600.0F) {
                   return null;
                }
             }
@@ -113,7 +120,7 @@ public final class BlastShield {
          if (distance > 10.0) {
             return 0.0F;
          } else {
-            RaycastFactory rays = factory(class_2338.method_49638(anchor), shieldPos, shieldState);
+            RaycastFactory rays = factory(class_2338.method_49638(anchor), shieldPos, shieldState, true);
             float exposure = exposure(
                target.method_5829(), point -> class_1922.method_17744(point, anchor, new ExposureRaycastContext(point, anchor), rays, context -> null) == null
             );
