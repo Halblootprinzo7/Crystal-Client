@@ -460,12 +460,16 @@ public final class AnchorActions {
 
                return false;
             } else {
+               int usesBefore = ClickGate.usesThisTick();
                class_1268 acted = VanillaClick.use(click, options.swing());
                if (silent != null) {
                   silent.back();
                }
 
-               if (acted != hand) {
+               // Anchor-optimizer mods take the detonation click over and remove the anchor on the client at once; the
+               // click still reaches the server, but vanilla's result never comes back. A click that left counts.
+               boolean wentOut = acted == null && ClickGate.usesThisTick() > usesBefore;
+               if (acted != hand && !wentOut) {
                   return false;
                } else {
                   options.onSent().run();
