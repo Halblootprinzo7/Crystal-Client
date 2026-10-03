@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "id": "crystal-addon",
+  "version": "0.1.0",
+  "name": "Crystal Addon",
+  "description": "Crystal-PvP-Module fuer Meteor Client, abgestimmt auf 2b2t.",
+  "icon": "assets/crystal-addon/icon.png",
+  "authors": [
+    "Maxi"
+  ],
+  "environment": "client",
+  "entrypoints": {
+    "meteor": [
+      "com.messerocks.crystal.CrystalAddon"
+    ]
+  },
+  "mixins": [
+    "crystal-addon.mixins.json"
+  ],
+  "custom": {
+    "meteor-client:color": "160,60,255",
+    "modmenu": {
+      "parent": {
+        "id": "meteor-client"
+      }
+    }
+  },
+  "depends": {
+    "java": ">=21",
+    "minecraft": ">=1.21.11",
+    "meteor-client": "*"
+  }
+}

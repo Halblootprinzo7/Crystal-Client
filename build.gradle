@@ -1,0 +1,35 @@
+plugins {
+    id 'fabric-loom' version '1.14.10'
+}
+
+version = project.mod_version
+group = 'com.messerocks'
+base { archivesName = 'crystal-addon' }
+
+repositories {
+    maven { url = 'https://maven.meteordev.org/releases' }
+    maven { url = 'https://maven.meteordev.org/snapshots' }
+}
+
+dependencies {
+    minecraft "com.mojang:minecraft:${project.minecraft_version}"
+    // The sources were recovered from a compiled jar and use intermediary names.
+    mappings "net.fabricmc:intermediary:${project.minecraft_version}:v2"
+    modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
+    modImplementation "meteordevelopment:meteor-client:${project.meteor_version}"
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
+}
+
+tasks.withType(JavaCompile).configureEach {
+    it.options.encoding = 'UTF-8'
+    it.options.release = 21
+}
+
+jar {
+    from('LICENSE') { rename { "${it}_crystal-addon" } }
+}
+
