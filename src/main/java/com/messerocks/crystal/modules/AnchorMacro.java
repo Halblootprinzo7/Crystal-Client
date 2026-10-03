@@ -439,7 +439,7 @@ public class AnchorMacro extends CrystalModule {
    private boolean lastShieldDiagonal;
    private class_2338 shieldAssumed;
    private boolean shieldDone;
-   private int shieldAge;
+   private int shieldSentAt;
    private boolean unsafeWarned;
    private String lastRejection;
    private class_2338 shieldPlaced;
@@ -930,6 +930,21 @@ public class AnchorMacro extends CrystalModule {
                         return;
                      }
 
+                     // Shield before the charge: both use glowstone, so no extra switch, and the shield's confirmation
+                     // runs out while the charge and the switch to the detonator happen instead of after them. If the
+                     // shield cannot go up, no charged anchor is left standing either.
+                     if ((Boolean)this.shield.get() && !this.shieldDone) {
+                        AnchorMacro.ShieldStep step = this.placeShieldNow(spot);
+                        if (step == AnchorMacro.ShieldStep.Turning) {
+                           return;
+                        }
+
+                        this.shieldDone = true;
+                        if (step == AnchorMacro.ShieldStep.Placed) {
+                           return;
+                        }
+                     }
+
                      AnchorActions.charge(spot, this.options(null, () -> {
                         this.predicted = AnchorMacro.AnchorState.Loaded;
                         if ((Boolean)this.debug.get()) {
@@ -967,7 +982,7 @@ public class AnchorMacro extends CrystalModule {
 
                         // Detonate only once the shield had time to be confirmed; the client shows it the moment the
                         // click goes out, whether the server accepts it or not.
-                        if (this.shieldAge++ < Math.max(1, this.predictionWindow() - 3)) {
+                        if (this.ticks - this.shieldSentAt < Math.max(1, this.predictionWindow() - 3)) {
                            return;
                         }
                      }
@@ -1209,7 +1224,7 @@ public class AnchorMacro extends CrystalModule {
                         this.shieldAssumed = spot;
                         this.shieldPlaced = spot;
                         this.shieldDone = true;
-                        this.shieldAge = 0;
+                        this.shieldSentAt = this.ticks;
                      }
                   );
                   if (!AnchorActions.clickWith(support, item, shieldOptions)) {
