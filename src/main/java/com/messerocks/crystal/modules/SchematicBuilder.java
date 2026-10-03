@@ -71,6 +71,16 @@ public class SchematicBuilder extends CrystalModule {
    private final SettingGroup sgBuild = this.settings.createGroup("Build");
    private final SettingGroup sgSafety = this.settings.createGroup("Safety");
    private final SettingGroup sgRender = this.settings.createGroup("Render");
+   private final Setting<SchematicBuilder.Mode> mode = this.sgGeneral
+      .add(
+         new meteordevelopment.meteorclient.settings.EnumSetting.Builder<SchematicBuilder.Mode>()
+            .name("mode")
+            .description(
+               "Automatic finds the next missing block itself and turns to it. Crosshair is a semi-automatic printer: it never turns and only places what your own crosshair lands on - a real face of a real block, never into the air - and only when the block that would go there is the one the schematic wants, oriented the way it wants it, from where you look. Swaps to the right item from the hotbar on its own."
+            )
+            .defaultValue(SchematicBuilder.Mode.Automatic)
+            .build()
+      );
    private final Setting<String> file = this.sgGeneral
       .add(
          ((Builder)((Builder)((Builder)((Builder)new Builder().name("schematic")).description("File from your Litematica schematics folder."))
@@ -698,7 +708,8 @@ public class SchematicBuilder extends CrystalModule {
                                     this.rescanTimer = 5;
                                  }
 
-                                 if (this.idleTicks % 60 == 0) {
+                                 // Idle is normal for the crosshair printer: it waits for you to look at the next block.
+                                 if (this.idleTicks % 60 == 0 && this.mode.get() != SchematicBuilder.Mode.Crosshair) {
                                     this.explainStall();
                                  }
                               }
@@ -1239,7 +1250,15 @@ public class SchematicBuilder extends CrystalModule {
    }
 
    private boolean rotating() {
-      return (Boolean)this.rotate.get() || Stealth.legitPlace();
+      return this.mode.get() == SchematicBuilder.Mode.Crosshair ? false : (Boolean)this.rotate.get() || Stealth.legitPlace();
+   }
+
+   // The look the server has is the one a click goes along. In Crosshair mode that has to be your crosshair: while
+   // another module holds a server-side look elsewhere, nothing is placed.
+   private boolean serverLooksWhereYouLook() {
+      double yaw = class_3532.method_15338(LegitPlace.currentYaw() - this.mc.field_1724.method_36454());
+      double pitch = LegitPlace.currentPitch() - this.mc.field_1724.method_36455();
+      return Math.abs(yaw) < 0.01 && Math.abs(pitch) < 0.01;
    }
 
    private double reach() {
@@ -1247,6 +1266,11 @@ public class SchematicBuilder extends CrystalModule {
    }
 
    private SchematicBuilder.ClickStep placeNext() {
+      if (this.job != null && this.mode.get() == SchematicBuilder.Mode.Crosshair) {
+         // A job is a block the automatic builder turned towards; the crosshair printer does not turn.
+         this.dropJob();
+      }
+
       if (this.job != null) {
          if (!this.stillWanted(this.job)) {
             this.dropJob();
@@ -1307,6 +1331,10 @@ public class SchematicBuilder extends CrystalModule {
    }
 
    private SchematicBuilder.ClickStep placeAlongLook() {
+      if (this.mode.get() == SchematicBuilder.Mode.Crosshair && !this.serverLooksWhereYouLook()) {
+         return SchematicBuilder.ClickStep.NONE;
+      }
+
       class_3965 look = LegitPlace.along(LegitPlace.currentYaw(), LegitPlace.currentPitch(), this.reach());
       if (look == null) {
          return SchematicBuilder.ClickStep.NONE;
@@ -1969,6 +1997,11 @@ public class SchematicBuilder extends CrystalModule {
       boolean heldAgainst() {
          return this == NO_CLICK || this == ORIENTATION;
       }
+   }
+
+   public static enum Mode {
+      Automatic,
+      Crosshair;
    }
 
    public static enum Orientation {
