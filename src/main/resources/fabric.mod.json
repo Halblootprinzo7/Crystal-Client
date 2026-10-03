@@ -3,15 +3,15 @@
   "id": "crystal-addon",
   "version": "${version}",
   "name": "Crystal Addon",
-  "description": "Crystal-PvP-Module fuer Meteor Client, abgestimmt auf 2b2t.",
+  "description": "Crystal and anchor PvP modules for Meteor Client.",
   "icon": "assets/crystal-addon/icon.png",
   "authors": [
-    "Maxi"
+    "Halblootprinzo7"
   ],
   "environment": "client",
   "entrypoints": {
     "meteor": [
-      "com.messerocks.crystal.CrystalAddon"
+      "dev.crystaladdon.CrystalAddon"
     ]
   },
   "mixins": [
