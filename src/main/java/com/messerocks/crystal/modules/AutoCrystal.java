@@ -1286,8 +1286,12 @@ public class AutoCrystal extends CrystalModule {
                && !(crystal.method_5829().method_49271(eyes) >= reach * reach)
                && Stealth.inView(crystal.method_5829())) {
                class_243 pos = crystal.method_73189();
+               // A crystal you put down yourself goes off as soon as you can hit it, whatever it now deals: the target
+               // has moved since it was placed - a far-placed one is reached only after a step or two - and a crystal
+               // left standing blocks every base around it. Only an open damage window is still waited out.
+               boolean own = this.ownCrystals.hittableFrom(crystal.method_5628()) != null;
                float most = this.maxTargetDamage(pos, false);
-               if (!(most <= 0.0F) && (!(most < required) || CrystalScore.lethal(most, need))) {
+               if (own || !(most <= 0.0F) && (!(most < required) || CrystalScore.lethal(most, need))) {
                   AutoCrystal.CrystalWait wait = this.crystalWait(crystal);
                   if (wait != AutoCrystal.CrystalWait.NONE) {
                      waiting = true;
@@ -1296,8 +1300,7 @@ public class AutoCrystal extends CrystalModule {
                      }
                   } else if (!(CrystalScore.upperBound(most, need) <= bestScore)) {
                      float damage = this.targetDamage(pos, false);
-                     if (!(damage <= 0.0F)
-                        && (!(damage < required) || CrystalScore.lethal(damage, need))
+                     if ((own || !(damage <= 0.0F) && (!(damage < required) || CrystalScore.lethal(damage, need)))
                         && !(CrystalScore.upperBound(damage, need) <= bestScore)
                         && Stealth.allowsEntity(crystal)) {
                         AutoCrystal.Aim aim = this.crystalAim(crystal);
@@ -1312,7 +1315,8 @@ public class AutoCrystal extends CrystalModule {
                            }
 
                            boolean lethal = CrystalScore.lethal(counted, need);
-                           if (!(counted <= 0.0F) && (!(counted < required) || lethal) && !(CrystalScore.upperBound(counted, need) <= bestScore)) {
+                           boolean worth = own ? floor <= 0.0F || counted > 0.0F : !(counted <= 0.0F) && (!(counted < required) || lethal);
+                           if (worth && !(CrystalScore.upperBound(counted, need) <= bestScore)) {
                               float selfDamage = this.selfDamage(pos);
                               if (this.selfDamageOk(selfDamage, (Double)this.maxBreakSelfDamage.get(), selfHealth, false)) {
                                  double score = CrystalScore.score(counted, selfDamage, (Double)this.selfDamageWeight.get(), need);
