@@ -1762,13 +1762,19 @@ public class AutoCrystal extends CrystalModule {
       Integer placedAt = looking == null ? null : this.ownBases.get(looking);
       if (placedAt == null || this.clientTicks - placedAt > OWN_BASE_TICKS || this.blockedByPending(looking)) {
          return null;
+      } else if (new class_238(looking).method_49271(this.mc.field_1724.method_33571()) >= this.placeReach() * this.placeReach()
+         || !VanillaLimits.canReachBlock(looking)
+         || !Stealth.inView(new class_238(looking))) {
+         return null;
       } else {
+         // Placing reaches 4.5 blocks, hitting a crystal only 3. The aura's own spots must be in both, but obsidian you
+         // put down to crystal is crystalled as soon as you can place on it; the hit follows once you are close enough.
          double floor = Math.min(required, (Double)this.facePlaceMinDamage.get());
-         double score = this.placementScore(looking, legacy, floor, selfHealth, Double.NEGATIVE_INFINITY);
+         double score = this.placementScore(looking, legacy, floor, selfHealth, Double.NEGATIVE_INFINITY, true);
          if (Double.isNaN(score)) {
             return null;
          } else {
-            AutoCrystal.Aim aim = this.cachedReachableAim(looking);
+            AutoCrystal.Aim aim = this.placeAim(looking);
             if (aim == null) {
                return null;
             } else {
