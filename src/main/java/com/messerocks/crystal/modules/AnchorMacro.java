@@ -51,6 +51,7 @@ import net.minecraft.class_2248;
 import net.minecraft.class_2338;
 import net.minecraft.class_2350;
 import net.minecraft.class_238;
+import net.minecraft.class_241;
 import net.minecraft.class_243;
 import net.minecraft.class_2680;
 import net.minecraft.class_3532;
@@ -936,7 +937,7 @@ public class AnchorMacro extends CrystalModule {
                         return;
                      }
 
-                     if (!BlockUtils.canPlaceBlock(spot, true, class_2246.field_23152)) {
+                     if (!BlockUtils.canPlaceBlock(spot, true, class_2246.field_23152) || this.inYourWay(spot)) {
                         return;
                      }
 
@@ -1290,6 +1291,37 @@ public class AnchorMacro extends CrystalModule {
       return Math.min((Double)this.range.get(), VanillaLimits.blockRange());
    }
 
+   // The space you are about to walk into. A block that is merely clear of your hitbox now still lands right in your
+   // way when you strafe: a tick or two later you run into it and get stuck on it. Velocity alone lags a tick behind
+   // the keys, so the direction your movement keys point counts as well.
+   private boolean inYourWay(class_2338 pos) {
+      class_238 box = this.mc.field_1724.method_5829();
+      class_243 velocity = this.mc.field_1724.method_18798();
+      double vx = velocity.field_1352;
+      double vz = velocity.field_1350;
+      class_241 input = this.mc.field_1724.field_3913.method_3128();
+      if (input.field_1343 != 0.0F || input.field_1342 != 0.0F) {
+         // Vanilla's movementInputToVelocity: x is sideways, y forward, turned by the yaw you walk with.
+         double yaw = Math.toRadians(this.mc.field_1724.method_36454());
+         double sin = Math.sin(yaw);
+         double cos = Math.cos(yaw);
+         double ix = input.field_1343 * cos - input.field_1342 * sin;
+         double iz = input.field_1342 * cos + input.field_1343 * sin;
+         double length = Math.sqrt(ix * ix + iz * iz);
+         if (length > 1.0E-4) {
+            vx += ix / length * 0.3;
+            vz += iz / length * 0.3;
+         }
+      }
+
+      if (vx * vx + vz * vz < 1.0E-4) {
+         return false;
+      } else {
+         class_238 path = box.method_1012(vx * 3.0, 0.0, vz * 3.0).method_1009(0.05, 0.0, 0.05);
+         return new class_238(pos).method_994(path);
+      }
+   }
+
    private class_2338 findSpot() {
       this.spotWaitsOnBlast = false;
       this.spotWaitsOnSight = false;
@@ -1307,7 +1339,8 @@ public class AnchorMacro extends CrystalModule {
             } else if (AnchorActions.charges(spot) >= 0 && !this.sightings.ready(spot)) {
                this.spotWaitsOnSight = true;
                return null;
-            } else if (AnchorActions.charges(spot) >= 0 || AnchorActions.canPlace(spot) && AnchorActions.placeHit(spot, this.mustRotate()) != null) {
+            } else if (AnchorActions.charges(spot) >= 0
+               || AnchorActions.canPlace(spot) && !this.inYourWay(spot) && AnchorActions.placeHit(spot, this.mustRotate()) != null) {
                if (!Stealth.allowsBlock(spot, spot.method_46558())) {
                   return null;
                } else if (this.unsafeEvenShielded(spot) != null) {
@@ -1361,7 +1394,7 @@ public class AnchorMacro extends CrystalModule {
                         skippedBlast = true;
                      } else {
                         boolean anchorThere = AnchorActions.charges(pos) >= 0;
-                        if (!anchorThere && !AnchorActions.canPlace(pos)) {
+                        if (!anchorThere && (!AnchorActions.canPlace(pos) || this.inYourWay(pos))) {
                            cannotPlace++;
                         } else if (!Stealth.allowsBlock(pos, center)) {
                            stealthBlocked++;
@@ -1525,6 +1558,8 @@ public class AnchorMacro extends CrystalModule {
                      && AnchorActions.canReplaceAt(pos, ((AnchorMacro.ShieldBlock)this.shieldBlock.get()).item())) {
                   if (!BlockUtils.canPlaceBlock(pos, true, ((AnchorMacro.ShieldBlock)this.shieldBlock.get()).block())) {
                      this.lastShieldProblem = "the shield spots overlap your own hitbox - step to the middle of your block";
+                  } else if (this.inYourWay(pos)) {
+                     this.lastShieldProblem = "the shield spots are where you are walking - it would stop you dead";
                   } else {
                      class_3965 support = this.supportFor(pos, anchorPos);
                      if (support == null) {
