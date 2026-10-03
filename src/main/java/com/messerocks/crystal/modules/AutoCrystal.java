@@ -1073,7 +1073,8 @@ public class AutoCrystal extends CrystalModule {
       }
 
       int best = -1;
-      float bestDamage = 0.0F;
+      // A crystal, totem or block scores the same as a bare fist; anything that does not beat that is no weapon.
+      float bestDamage = this.target == null ? 0.0F : DamageUtils.getAttackDamage(this.mc.field_1724, this.target, class_1799.field_8037);
 
       for (int i = 0; i <= 8; i++) {
          class_1799 stack = this.mc.field_1724.method_31548().method_5438(i);
@@ -1357,8 +1358,8 @@ public class AutoCrystal extends CrystalModule {
             }
 
             class_1934 mode = EntityUtils.getGameMode(player);
-            if (mode != class_1934.field_9215) {
-               return player.method_5477().getString() + " ignored: " + (mode == null ? "no tab entry" : mode.name().toLowerCase());
+            if (!hurtable(mode)) {
+               return player.method_5477().getString() + " ignored: " + mode.name().toLowerCase();
             }
          }
       }
@@ -1404,6 +1405,12 @@ public class AutoCrystal extends CrystalModule {
       return targets.size() > max ? targets.subList(0, max) : targets;
    }
 
+   // Survival and adventure players both take explosion damage, and a player without a tab entry is still a player.
+   // Only creative and spectator are out.
+   private static boolean hurtable(class_1934 mode) {
+      return mode != class_1934.field_9220 && mode != class_1934.field_9219;
+   }
+
    private boolean isCandidate(class_1657 player) {
       if (player == this.mc.field_1724 || player.method_31481()) {
          return false;
@@ -1412,7 +1419,7 @@ public class AutoCrystal extends CrystalModule {
       } else if (!Friends.get().shouldAttack(player)) {
          return false;
       } else {
-         return player instanceof FakePlayerEntity fakePlayer ? !fakePlayer.noHit : EntityUtils.getGameMode(player) == class_1934.field_9215;
+         return player instanceof FakePlayerEntity fakePlayer ? !fakePlayer.noHit : hurtable(EntityUtils.getGameMode(player));
       }
    }
 
@@ -1839,6 +1846,9 @@ public class AutoCrystal extends CrystalModule {
                      if (this.spend(this.breakBudget, Stealth.actionCost(), false)) {
                         HotbarSwap.syncSelected();
                         this.mc.field_1724.field_3944.method_52787(class_2824.method_34206(crystal, this.mc.field_1724.method_5715()));
+                        // The server resets its attack cooldown on this hit; keep the client's in step, like vanilla's
+                        // attackEntity, or the next sword hit looks charged here and lands weak there.
+                        this.mc.field_1724.method_7350();
                         if ((Boolean)this.swing.get()) {
                            this.mc.field_1724.method_6104(class_1268.field_5808);
                         } else {
@@ -2211,13 +2221,11 @@ public class AutoCrystal extends CrystalModule {
       Set<K> expire(int tick, int window, Predicate<K> resolved) {
          Set<K> answered = new HashSet<>();
          this.sentAt.entrySet().removeIf(entry -> {
-            if (tick - entry.getValue() > window) {
-               return true;
-            } else if (!resolved.test(entry.getKey())) {
-               return false;
-            } else {
+            if (resolved.test(entry.getKey())) {
                answered.add(entry.getKey());
                return true;
+            } else {
+               return tick - entry.getValue() > window;
             }
          });
          return answered;
