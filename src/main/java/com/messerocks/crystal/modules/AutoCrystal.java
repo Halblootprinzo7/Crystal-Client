@@ -263,9 +263,9 @@ public class AutoCrystal extends CrystalModule {
          new meteordevelopment.meteorclient.settings.BoolSetting.Builder()
             .name("far-place")
             .description(
-               "Also place on obsidian that is in place reach (4.5) but where the crystal would stand beyond hit reach (3.0) - vanilla lets you place that far, only the hit has to wait until you are close enough. Spots you can hit right away are always taken first, and no second far crystal is put down while one already stands out of reach."
+               "Also place on obsidian that is in place reach (4.5) but where the crystal would stand beyond hit reach (3.0). Nobody can hit a crystal that far away: it explodes only once you walk within 3 blocks of it. Spots you can hit right away are always taken first, and no second far crystal is put down while one already stands out of reach."
             )
-            .defaultValue(true)
+            .defaultValue(false)
             .visible(this.place::get)
             .build()
       );
@@ -382,7 +382,7 @@ public class AutoCrystal extends CrystalModule {
          new meteordevelopment.meteorclient.settings.IntSetting.Builder()
             .name("replace-delay")
             .description(
-               "Ticks after a crystal is hit before the next one goes on that obsidian. The hit reaches the server first, so the spot is free by the time the new crystal arrives - the old one is aimed through even while it is still drawn here. 0 places in the very same tick as the hit, along the same look, whenever the crystals are already in hand (or with place-speed above 20)."
+               "Ticks after a crystal is hit before the next one goes on that obsidian - once the client no longer shows the old crystal in the way, as for any player. 0 places in the very same tick as the hit, along the same look and right through the crystal still drawn there, whenever the crystals are already in hand (or with place-speed above 20): faster than any vanilla client, and easier for an anticheat to notice."
             )
             .defaultValue(2)
             .range(0, 5)
@@ -650,11 +650,16 @@ public class AutoCrystal extends CrystalModule {
    private void onTick(Pre event) {
       if (this.isActive()) {
          long started = System.nanoTime();
-         // Crystals already hit are gone on the server before our next click arrives; aiming does not stop at them.
-         LegitPlace.passingThrough(this.goneWhenPlanned, () -> {
+         // replace-delay 0: crystals already hit are gone on the server before the next click arrives, so aiming does not
+         // stop at them. Otherwise a crystal still drawn in the way blocks the click as it would for any player.
+         if ((Integer)this.replaceDelay.get() == 0) {
+            LegitPlace.passingThrough(this.goneWhenPlanned, () -> {
+               this.tick();
+               return null;
+            });
+         } else {
             this.tick();
-            return null;
-         });
+         }
          long spent = System.nanoTime() - started;
          this.tickNanos += spent;
          this.worstTickNanos = Math.max(this.worstTickNanos, spent);
@@ -1861,9 +1866,11 @@ public class AutoCrystal extends CrystalModule {
          || !VanillaLimits.canReachBlock(looking)
          || !Stealth.inView(new class_238(looking))) {
          return null;
+      } else if (!this.hittableAt(looking) && !this.farPlacingAllowed()) {
+         // Placing reaches 4.5 blocks, hitting a crystal only 3: a crystal put down beyond that just stands there until
+         // you walk up to it. Only far-place asks for that, and then only one at a time.
+         return null;
       } else {
-         // Placing reaches 4.5 blocks, hitting a crystal only 3. The aura's own spots must be in both, but obsidian you
-         // put down to crystal is crystalled as soon as you can place on it; the hit follows once you are close enough.
          double floor = Math.min(required, (Double)this.facePlaceMinDamage.get());
          double score = this.placementScore(looking, legacy, floor, selfHealth, Double.NEGATIVE_INFINITY, true);
          if (Double.isNaN(score)) {
