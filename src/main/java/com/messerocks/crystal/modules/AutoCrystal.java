@@ -5,7 +5,9 @@ import com.messerocks.crystal.CrystalModule;
 import com.messerocks.crystal.utils.ActionBudget;
 import com.messerocks.crystal.utils.AimUtils;
 import com.messerocks.crystal.utils.CrystalUtils;
+import com.messerocks.crystal.utils.HumanSwap;
 import com.messerocks.crystal.utils.LegitPlace;
+import com.messerocks.crystal.utils.ReactionTimer;
 import com.messerocks.crystal.utils.RevivedPlayers;
 import com.messerocks.crystal.utils.ServerVersion;
 import com.messerocks.crystal.utils.TurnProgress;
@@ -470,6 +472,12 @@ public class AutoCrystal extends CrystalModule {
    // us they are still in the world; hitting them again only burns the one rotation a tick that Stealth allows.
    private final Map<Integer, Integer> attackedAt = new HashMap<>();
    private final Set<Integer> goneCrystals = new HashSet<>();
+   // Human mode: targets, crystals and spots are only acted on once they have been around for the reaction time.
+   private final ReactionTimer reaction = new ReactionTimer();
+   private static final int SWAP_PRIORITY = 50;
+   // Human mode: nobody puts the sword back in hand during a pause of a few ticks between two crystals.
+   private static final int HUMAN_RETURN_DELAY = 10;
+   private int lastWorkTick = -1000;
 
    public AutoCrystal() {
       super(CrystalAddon.CATEGORY, "auto-crystal", "Places and breaks end crystals on the best target.");
@@ -489,6 +497,7 @@ public class AutoCrystal extends CrystalModule {
       this.usedPositions.clear();
       this.attackedAt.clear();
       this.goneCrystals.clear();
+      this.reaction.clear();
    }
 
    @EventHandler
@@ -509,15 +518,16 @@ public class AutoCrystal extends CrystalModule {
          } else if ((Boolean)this.pauseOnMine.get() && this.mc.field_1761.method_2923()) {
             this.logState("paused", () -> "mining (pause-on-mine)");
          } else {
-            this.target = this.findTarget();
+            class_1657 found = this.findTarget();
+            boolean reacting = found != null && !this.reaction.ready(found);
+            this.target = reacting ? null : found;
             if (this.target == null) {
-               this.target = null;
                this.workAvailable = false;
-               this.idleReason = this.ignoredPlayerReason();
+               this.idleReason = reacting ? found.method_5477().getString() + " (reacting)" : this.ignoredPlayerReason();
                this.turn.reset(TURN_OWNER);
                String why = this.idleReason != null ? this.idleReason : "nobody in range";
                this.logState("no-target", () -> why);
-               if ((Boolean)this.returnToWeapon.get() && this.switchMode.get() == AutoCrystal.SwitchMode.Hotbar) {
+               if ((Boolean)this.returnToWeapon.get() && this.switching() == AutoCrystal.SwitchMode.Hotbar) {
                   this.returnToSword();
                } else {
                   this.restoreSlot();
@@ -536,7 +546,9 @@ public class AutoCrystal extends CrystalModule {
                   this.tryPlace();
                }
 
-               if (!this.workAvailable) {
+               if (this.workAvailable) {
+                  this.lastWorkTick = this.mc.field_1724.field_6012;
+               } else {
                   this.returnToSword();
                }
 
@@ -653,14 +665,20 @@ public class AutoCrystal extends CrystalModule {
    }
 
    private void returnToSword() {
-      if ((Boolean)this.returnToWeapon.get() && this.switchMode.get() == AutoCrystal.SwitchMode.Hotbar) {
+      if ((Boolean)this.returnToWeapon.get() && this.switching() == AutoCrystal.SwitchMode.Hotbar) {
          if (this.mc.field_1724 != null) {
+            if (Stealth.humanMode() && this.mc.field_1724.field_6012 - this.lastWorkTick < HUMAN_RETURN_DELAY) {
+               return;
+            }
+
             if (this.returnSlot != -1) {
                int weapon = this.bestWeaponSlot();
                if (weapon == -1) {
                   this.restoreSlot();
                } else {
-                  if (weapon != this.mc.field_1724.method_31548().method_67532()) {
+                  if (Stealth.humanMode()) {
+                     HumanSwap.returnLater(weapon);
+                  } else if (weapon != this.mc.field_1724.method_31548().method_67532()) {
                      InvUtils.swap(weapon, false);
                   }
 
@@ -722,8 +740,12 @@ public class AutoCrystal extends CrystalModule {
          if (this.mc.field_1724 == null) {
             this.returnSlot = -1;
          } else {
-            if (this.switchMode.get() == AutoCrystal.SwitchMode.Hotbar && this.returnSlot != this.mc.field_1724.method_31548().method_67532()) {
-               InvUtils.swap(this.returnSlot, false);
+            if (this.switching() == AutoCrystal.SwitchMode.Hotbar && this.returnSlot != this.mc.field_1724.method_31548().method_67532()) {
+               if (Stealth.humanMode()) {
+                  HumanSwap.returnLater(this.returnSlot);
+               } else {
+                  InvUtils.swap(this.returnSlot, false);
+               }
             }
 
             this.returnSlot = -1;
@@ -784,7 +806,28 @@ public class AutoCrystal extends CrystalModule {
    }
 
    private boolean shouldRotate() {
-      return ((Boolean)this.rotate.get() || Stealth.legitPlace()) && this.aimMode.get() != AutoCrystal.AimMode.Crosshair;
+      return ((Boolean)this.rotate.get() || Stealth.legitPlace() || Stealth.humanMode()) && this.aimMode.get() != AutoCrystal.AimMode.Crosshair;
+   }
+
+   // Silent swaps select, click and select back inside one tick, which no hand does. Human mode turns them into
+   // real hotbar switches.
+   private AutoCrystal.SwitchMode switching() {
+      AutoCrystal.SwitchMode mode = (AutoCrystal.SwitchMode)this.switchMode.get();
+      return mode == AutoCrystal.SwitchMode.Silent && Stealth.humanMode() ? AutoCrystal.SwitchMode.Hotbar : mode;
+   }
+
+   // Human mode: crystals are only placed once they have been in hand for a full tick. Starts the switch.
+   private boolean crystalsInHand(FindItemResult crystals) {
+      if (!Stealth.humanMode() || crystals.getHand() == class_1268.field_5810) {
+         return true;
+      } else {
+         int selected = this.mc.field_1724.method_31548().method_67532();
+         if (crystals.slot() != selected && this.returnSlot == -1) {
+            this.returnSlot = selected;
+         }
+
+         return HumanSwap.ready(crystals.slot(), SWAP_PRIORITY);
+      }
    }
 
    private boolean canHit(class_238 box) {
@@ -813,7 +856,8 @@ public class AutoCrystal extends CrystalModule {
                class_243 pos = crystal.method_73189();
                if (this.canHit(crystal.method_5829())
                   && Stealth.allowsEntity(crystal)
-                  && (!limitAim || (this.aimMode.get() == AutoCrystal.AimMode.Crosshair ? this.looksAtCrystal(crystal) : this.aimAllows(pos)))) {
+                  && (!limitAim || (this.aimMode.get() == AutoCrystal.AimMode.Crosshair ? this.looksAtCrystal(crystal) : this.aimAllows(pos)))
+                  && this.reaction.ready(class_2338.method_49638(pos).method_10074())) {
                   float selfDamage = DamageUtils.crystalDamage(this.mc.field_1724, pos);
                   if (!(selfDamage > (Double)this.maxBreakSelfDamage.get()) && !(selfDamage >= selfHealth)) {
                      float damage = DamageUtils.crystalDamage(this.target, pos);
@@ -939,7 +983,9 @@ public class AutoCrystal extends CrystalModule {
 
    private boolean spend(ActionBudget budget) {
       double cost = Stealth.actionCost();
-      if (!budget.canAfford(cost)) {
+      if (Stealth.humanMode() && HumanSwap.claimedAbove(SWAP_PRIORITY)) {
+         return false;
+      } else if (!budget.canAfford(cost)) {
          return false;
       } else {
          return !Stealth.claimAction() ? false : budget.tryConsume(cost);
@@ -960,7 +1006,7 @@ public class AutoCrystal extends CrystalModule {
       FindItemResult crystals = InvUtils.findInHotbar(new class_1792[]{class_1802.field_8301});
       if (!crystals.found()) {
          this.placeSkip = "no end crystals in the hotbar";
-      } else if (this.switchMode.get() == AutoCrystal.SwitchMode.None && crystals.getHand() == null) {
+      } else if (this.switching() == AutoCrystal.SwitchMode.None && crystals.getHand() == null) {
          this.placeSkip = "crystals are not in a hand and switch-mode is None";
       } else {
          boolean legacy = switch ((AutoCrystal.Placement)this.placement.get()) {
@@ -983,7 +1029,8 @@ public class AutoCrystal extends CrystalModule {
                return;
             }
 
-            if (!this.readyToAct(aim)) {
+            boolean inHand = this.crystalsInHand(crystals);
+            if (!this.readyToAct(aim) || !inHand) {
                return;
             }
 
@@ -1029,7 +1076,7 @@ public class AutoCrystal extends CrystalModule {
                   class_2338 base = origin.method_10069(x, y, z);
                   if (!this.blockedByPending(base)) {
                      double damage = this.placementDamage(base, legacy, required, selfHealth);
-                     if (damage > bestDamage) {
+                     if (damage > 0.0 && this.reaction.ready(base) && damage > bestDamage) {
                         bestDamage = damage;
                         best = base;
                      }
@@ -1136,11 +1183,11 @@ public class AutoCrystal extends CrystalModule {
             class_1268 hand = crystals.getHand();
             boolean swapped = false;
             if (hand == null) {
-               if (this.switchMode.get() == AutoCrystal.SwitchMode.None) {
+               if (this.switching() == AutoCrystal.SwitchMode.None) {
                   return;
                }
 
-               boolean silent = this.switchMode.get() == AutoCrystal.SwitchMode.Silent;
+               boolean silent = this.switching() == AutoCrystal.SwitchMode.Silent;
                if (!silent && this.returnSlot == -1) {
                   this.returnSlot = this.mc.field_1724.method_31548().method_67532();
                }
