@@ -459,6 +459,10 @@ public class AnchorMacro extends CrystalModule {
    private boolean sneakWarned;
    private boolean viewWarned;
    private class_2338 detonatedAt;
+   // The anchor of this cycle has been seen charged. Gone again before our detonation counted - another mod took the
+   // click over and removed it on the client, or someone else set it off - the cycle is over: placing again would only
+   // throw a second anchor at a spot that has just exploded.
+   private boolean sawLoaded;
    private int detonatedAge;
    private boolean spotWaitsOnBlast;
    private boolean pressQueued;
@@ -856,6 +860,19 @@ public class AnchorMacro extends CrystalModule {
          }
       }
 
+      AnchorMacro.AnchorState seen = this.worldStateAt(spot);
+      if (seen == AnchorMacro.AnchorState.Loaded) {
+         this.sawLoaded = true;
+      } else if (seen == AnchorMacro.AnchorState.Air && this.sawLoaded) {
+         if ((Boolean)this.debug.get()) {
+            this.info("Anchor at %s is gone - cycle done", new Object[]{format(spot)});
+         }
+
+         this.blastShown = new AnchorMacro.Blast(spot, this.ticks);
+         this.finish();
+         return;
+      }
+
       if (this.predicted != null) {
          AnchorMacro.AnchorState real = this.worldStateAt(spot);
          if (real.ordinal() >= this.predicted.ordinal() || ++this.predictedAge > this.predictionWindow()) {
@@ -1085,6 +1102,7 @@ public class AnchorMacro extends CrystalModule {
       }
 
       this.unsafeWarned = false;
+      this.sawLoaded = false;
       this.working = null;
       this.predicted = null;
       this.predictedAge = 0;
