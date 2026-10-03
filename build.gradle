@@ -3,7 +3,7 @@ plugins {
 }
 
 version = project.mod_version
-group = 'com.messerocks'
+group = 'dev.crystaladdon'
 base { archivesName = 'crystal-addon' }
 
 repositories {
