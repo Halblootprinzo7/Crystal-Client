@@ -4,6 +4,9 @@ import com.messerocks.crystal.CrystalAddon;
 import com.messerocks.crystal.CrystalModule;
 import com.messerocks.crystal.utils.ClickGate;
 import com.messerocks.crystal.utils.HotbarSwap;
+import net.minecraft.class_2680;
+import meteordevelopment.meteorclient.mixin.KeyBindingAccessor;
+import com.messerocks.crystal.utils.KeyPriority;
 import com.messerocks.crystal.utils.LegitPlace;
 import com.messerocks.crystal.utils.TurnProgress;
 import com.messerocks.crystal.utils.VanillaClick;
@@ -167,7 +170,8 @@ public class SwordPlace extends CrystalModule {
    private final SwordPlace.Press press = new SwordPlace.Press();
    private int pressSlot = -1;
    private boolean saidWaiting;
-   private Keybind warnedBind;
+   // A shared Use-key press Sword Place took: vanilla must not see the key until it is let go.
+   private boolean ownsUseKey;
    private int switchedTo = -1;
    private int switchedFrom = -1;
    private class_2338 lastPlaced;
@@ -186,6 +190,7 @@ public class SwordPlace extends CrystalModule {
    public void onDeactivate() {
       this.wasPressed = false;
       this.pressLatched = false;
+      this.ownsUseKey = false;
       this.lockout = 0;
       this.endPress();
       this.previewPos = null;
@@ -216,19 +221,28 @@ public class SwordPlace extends CrystalModule {
             boolean firstDown = pressed && !this.wasPressed || this.pressLatched;
             this.pressLatched = false;
             this.wasPressed = pressed;
-            if (this.bindIsUseKey()) {
-               this.endPress();
-               if (firstDown && !((Keybind)this.bind.get()).equals(this.warnedBind)) {
-                  this.warnedBind = ((Keybind)this.bind.get()).copy();
-                  this.warning(
-                     "place-bind is also Minecraft's \"Use Item\" key, which right-clicks on the same press. Bind one of the two to something else - until then Sword Place does nothing.",
-                     new Object[0]
-                  );
-               }
-            } else {
+            // place-bind may be Minecraft's own Use key. Then each press is shared: Sword Place takes it when it would
+            // put obsidian down (weapon in hand, crosshair on a spot for it), and vanilla keeps every other one - a
+            // crystal on obsidian, an anchor click, eating. A press Sword Place takes is kept from vanilla entirely.
+            boolean shared = this.bindIsUseKey();
+            if (!pressed) {
+               this.ownsUseKey = false;
+            }
+
+            if (shared && firstDown && !this.takesSharedPress()) {
+               firstDown = false;
+            }
+
+            {
                if (firstDown && this.lockout == 0) {
                   this.press.start();
                   this.saidWaiting = false;
+                  this.ownsUseKey = shared;
+               }
+
+               // Before anything reads the Use key this tick: Sword Place's own checks below, and vanilla right after.
+               if (shared && (this.ownsUseKey || this.press.live())) {
+                  this.suppressVanillaUse();
                }
 
                if (!this.press.hasSwitched()) {
@@ -296,19 +310,62 @@ public class SwordPlace extends CrystalModule {
                   }
                }
             }
+
+            if (this.press.live()) {
+               KeyPriority.hold();
+            }
          }
       }
    }
 
+   // Whether a shared Use-key press is Sword Place's: weapon in hand and the crosshair on a spot obsidian would go,
+   // not on obsidian or bedrock (that press is for a crystal) or on a block that reacts to a click.
+   private boolean takesSharedPress() {
+      if ((Boolean)this.onlyWithWeapon.get() && !this.weaponInHand()) {
+         return false;
+      } else {
+         class_3965 look = this.trace();
+         if (look == null) {
+            return false;
+         } else {
+            class_2680 state = this.mc.field_1687.method_8320(look.method_17777());
+            if (state.method_27852(class_2246.field_10540) || state.method_27852(class_2246.field_9987) || LegitPlace.isInteractive(state)) {
+               return false;
+            } else {
+               class_1750 context = new class_1750(this.mc.field_1724, class_1268.field_5808, new class_1799(class_1802.field_8281), look);
+               return context.method_7716() && BlockUtils.canPlaceBlock(context.method_8037(), true, class_2246.field_10540);
+            }
+         }
+      }
+   }
+
+   // Keep a press Sword Place took away from vanilla: drop what is queued on the Use key and its held state, so
+   // neither the press nor the held-button repeat places from whatever is in hand.
+   private void suppressVanillaUse() {
+      KeyBindingAccessor use = (KeyBindingAccessor)this.mc.field_1690.field_1904;
+      use.meteor$setTimesPressed(0);
+      this.mc.field_1690.field_1904.method_23481(false);
+   }
+
    private void endPress() {
+      if (this.press.live()) {
+         KeyPriority.release();
+      }
+
       this.press.end();
       this.pressSlot = -1;
       this.giveBack();
    }
 
    private void giveBack() {
+      this.giveBack(false);
+   }
+
+   // soon: the click went out, so the obsidian has done its job - back to the weapon on the next tick that allows
+   // it, which also frees the off-hand for the crystal that comes next.
+   private void giveBack(boolean soon) {
       if (this.borrowed != null) {
-         this.back(this.borrowed, this.borrowedFrom);
+         this.back(this.borrowed, this.borrowedFrom, soon);
          this.borrowed = null;
          this.borrowedFrom = -1;
       }
@@ -411,7 +468,7 @@ public class SwordPlace extends CrystalModule {
          }
 
          if (sent) {
-            this.giveBack();
+            this.giveBack(true);
          }
 
          return sent;
@@ -423,7 +480,16 @@ public class SwordPlace extends CrystalModule {
    }
 
    private void back(HotbarSwap silent, int from) {
-      silent.back();
+      this.back(silent, from, false);
+   }
+
+   private void back(HotbarSwap silent, int from, boolean soon) {
+      if (soon) {
+         silent.backSoon();
+      } else {
+         silent.back();
+      }
+
       if (silent.swapped()) {
          this.switchedTo = this.mc.field_1724.method_31548().method_67532();
          if (this.switchedFrom == -1) {

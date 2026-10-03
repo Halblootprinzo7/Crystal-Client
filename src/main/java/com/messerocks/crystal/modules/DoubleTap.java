@@ -7,6 +7,7 @@ import com.messerocks.crystal.utils.ClickGate;
 import com.messerocks.crystal.utils.CrystalUtils;
 import com.messerocks.crystal.utils.DamageWindow;
 import com.messerocks.crystal.utils.HotbarSwap;
+import com.messerocks.crystal.utils.KeyPriority;
 import com.messerocks.crystal.utils.KnockbackPredictor;
 import com.messerocks.crystal.utils.LegitPlace;
 import com.messerocks.crystal.utils.ReactionClock;
@@ -549,6 +550,7 @@ public class DoubleTap extends CrystalModule {
                boolean justPressed = pressed && !this.wasPressed;
                this.wasPressed = pressed;
                if (this.stage != DoubleTap.Stage.Idle) {
+                  KeyPriority.hold();
                   this.advance();
                } else if (justPressed) {
                   this.target = this.findTarget(true);
@@ -1733,6 +1735,10 @@ public class DoubleTap extends CrystalModule {
          }
 
          this.returnSlot = -1;
+      }
+
+      if (this.stage != DoubleTap.Stage.Idle) {
+         KeyPriority.release();
       }
 
       this.enter(DoubleTap.Stage.Idle);
