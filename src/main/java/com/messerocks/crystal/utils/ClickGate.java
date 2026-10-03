@@ -3,6 +3,7 @@ package com.messerocks.crystal.utils;
 import meteordevelopment.meteorclient.MeteorClient;
 import meteordevelopment.meteorclient.events.packets.PacketEvent.Send;
 import meteordevelopment.meteorclient.events.world.TickEvent.Pre;
+import meteordevelopment.meteorclient.mixininterface.IClientPlayerInteractionManager;
 import meteordevelopment.meteorclient.mixininterface.IPlayerInteractEntityC2SPacket;
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.class_2813;
@@ -13,9 +14,11 @@ import net.minecraft.class_2868;
 import net.minecraft.class_2879;
 import net.minecraft.class_2885;
 import net.minecraft.class_2886;
+import net.minecraft.class_310;
 import net.minecraft.class_2846.class_2847;
 
 public final class ClickGate {
+   private static final class_310 mc = class_310.method_1551();
    private static int tick;
    private static int useTick = -1;
    private static int attackTick = -1;
@@ -94,6 +97,11 @@ public final class ClickGate {
    )
    private static void onTickStart(Pre event) {
       tick++;
+      // A number key or the scroll wheel changes the selected slot without a packet; vanilla only sends it later in
+      // this tick. Sending it now marks slotTick, so no module clicks in the same tick as that switch.
+      if (mc.field_1724 != null && mc.field_1761 != null) {
+         ((IClientPlayerInteractionManager)mc.field_1761).meteor$syncSelected();
+      }
    }
 
    @EventHandler(

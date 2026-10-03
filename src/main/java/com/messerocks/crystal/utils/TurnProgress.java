@@ -1,5 +1,6 @@
 package com.messerocks.crystal.utils;
 
+import com.messerocks.crystal.mixin.MinecraftClientAccessor;
 import com.messerocks.crystal.modules.Stealth;
 import java.lang.reflect.Field;
 import java.util.List;
@@ -89,18 +90,16 @@ public final class TurnProgress {
          return false;
       } else if (this.movementSent()) {
          return false;
-      } else if (!this.claim(requester, priority)) {
-         return false;
       } else if (refusesLook(yaw, pitch)) {
          return false;
+      } else if (mc.field_1724.field_6012 != this.lastSentTick && this.interactionTick == this.clientTick) {
+         return false;
+      } else if (!this.claim(requester, priority)) {
+         return false;
       } else if (mc.field_1724.field_6012 != this.lastSentTick) {
-         if (this.interactionTick == this.clientTick) {
-            return false;
-         } else {
-            this.blocked = false;
-            double cap = Stealth.turnCap();
-            return cap <= 0.0 ? true : this.remainingTicks(yaw, pitch, cap) <= 1;
-         }
+         this.blocked = false;
+         double cap = Stealth.turnCap();
+         return cap <= 0.0 ? true : this.remainingTicks(yaw, pitch, cap) <= 1;
       } else {
          return this.queued != null && this.queued.accepts(yaw, pitch);
       }
@@ -111,7 +110,12 @@ public final class TurnProgress {
    }
 
    public boolean serverHas(double yaw, double pitch) {
-      return mc.field_1724 != null && !this.movementSent() && !Double.isNaN(this.packetYaw) && sameRotation(this.packetYaw, this.packetPitch, yaw, pitch);
+      // packetYaw is the float that went out; compare in float too, or a long session's large unwrapped yaw rounds
+      // outside the tolerance and a settled look is never recognised.
+      return mc.field_1724 != null
+         && !this.movementSent()
+         && !Double.isNaN(this.packetYaw)
+         && sameRotation(this.packetYaw, this.packetPitch, (float)yaw, (float)pitch);
    }
 
    public double serverLookYaw(double fallback) {
@@ -146,9 +150,11 @@ public final class TurnProgress {
          return false;
       } else if (this.movementSent()) {
          return false;
-      } else if (!this.claim(requester, priority)) {
-         return false;
       } else if (refusesLook(yaw, pitch)) {
+         return false;
+      } else if (mc.field_1724.field_6012 != this.lastSentTick && this.interactionTick == this.clientTick) {
+         return false;
+      } else if (!this.claim(requester, priority)) {
          return false;
       } else if (mc.field_1724.field_6012 == this.lastSentTick) {
          if (this.queued != null && this.queued.accepts(yaw, pitch)) {
@@ -160,8 +166,6 @@ public final class TurnProgress {
          } else {
             return false;
          }
-      } else if (this.interactionTick == this.clientTick) {
-         return false;
       } else {
          this.blocked = false;
          double cap = Stealth.turnCap();
@@ -350,12 +354,18 @@ public final class TurnProgress {
       return this.tickPitch;
    }
 
+   // A click of the player's own that vanilla is about to send this tick: a press still queued on attack or use,
+   // or a held use button whose repeat comes due now (vanilla repeats a held use every 4 ticks, on the tick
+   // itemUseCooldown runs out). Merely holding a button is not one - a held attack never repeats, and holding the
+   // sword button through a fight must not stop every module for as long as it is down.
    public static boolean ownClickPending() {
       class_315 options = mc.field_1690;
-      return Input.isPressed(options.field_1886)
-         || Input.isPressed(options.field_1904)
-         || ((KeyBindingAccessor)options.field_1886).meteor$getTimesPressed() > 0
-         || ((KeyBindingAccessor)options.field_1904).meteor$getTimesPressed() > 0;
+      if (((KeyBindingAccessor)options.field_1886).meteor$getTimesPressed() > 0
+         || ((KeyBindingAccessor)options.field_1904).meteor$getTimesPressed() > 0) {
+         return true;
+      } else {
+         return Input.isPressed(options.field_1904) && ((MinecraftClientAccessor)mc).crystal$getItemUseCooldown() <= 1;
+      }
    }
 
    public static void requestCamera() {

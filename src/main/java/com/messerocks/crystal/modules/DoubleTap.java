@@ -452,6 +452,9 @@ public class DoubleTap extends CrystalModule {
       );
    private final ActionBudget crystalBudget = new ActionBudget();
    private int returnSlot = -1;
+   // A key press: above the auras (Auto Crystal at 50), so an aura waiting on its budget cannot hold the head while
+   // the combo key is down.
+   private static final int TURN_PRIORITY = 70;
    private static final Object TURN_OWNER = new Object();
    private final TurnProgress turn = TurnProgress.SHARED;
    private int crystalsDone;
@@ -1421,12 +1424,12 @@ public class DoubleTap extends CrystalModule {
          return DoubleTap.Turn.Queued;
       } else if (this.reactingTo != null) {
          this.turn.reset(TURN_OWNER);
-         this.turn.wouldReach(TURN_OWNER, yaw, pitch, 50);
+         this.turn.wouldReach(TURN_OWNER, yaw, pitch, TURN_PRIORITY);
          return DoubleTap.Turn.Reacting;
       } else if (this.turn.heldByOther(TURN_OWNER)) {
          return this.cameraHolds(yaw, pitch) ? DoubleTap.Turn.Camera : DoubleTap.Turn.Busy;
       } else {
-         boolean queued = settled ? this.turn.turnToSettled(TURN_OWNER, yaw, pitch, 50, current) : this.turn.turnTo(TURN_OWNER, yaw, pitch, 50, current);
+         boolean queued = settled ? this.turn.turnToSettled(TURN_OWNER, yaw, pitch, TURN_PRIORITY, current) : this.turn.turnTo(TURN_OWNER, yaw, pitch, TURN_PRIORITY, current);
          if (queued) {
             return DoubleTap.Turn.Queued;
          } else if (TurnProgress.cameraNeeded()) {
