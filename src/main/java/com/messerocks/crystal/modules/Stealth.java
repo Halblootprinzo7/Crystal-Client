@@ -99,11 +99,11 @@ public class Stealth extends CrystalModule {
          ((meteordevelopment.meteorclient.settings.DoubleSetting.Builder)((meteordevelopment.meteorclient.settings.DoubleSetting.Builder)new meteordevelopment.meteorclient.settings.DoubleSetting.Builder()
                   .name("max-actions-per-second"))
                .description(
-                  "Clicks per second across all modules together, left and right button counted together. Each button still clicks at most once a tick, so 40 lets both run every tick."
+                  "Clicks per second across all modules together, left and right button counted together. 40 lets both buttons click every tick; above that only a module whose own speed is set above 20 clicks more than once a tick."
                ))
             .defaultValue(12.0)
-            .range(1.0, 40.0)
-            .sliderRange(1.0, 40.0)
+            .range(1.0, 100.0)
+            .sliderRange(1.0, 100.0)
             .build()
       );
    private final Setting<Boolean> sameTickSwitch = this.sgPacing

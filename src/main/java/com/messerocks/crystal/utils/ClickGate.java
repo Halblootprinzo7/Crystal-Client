@@ -26,6 +26,14 @@ public final class ClickGate {
    private static int clickTick = -1;
    private static int slotTick = -1;
    private static int inventoryTick = -1;
+   // Clicks of each kind (right, left, slot change) this tick may carry. 1 is one finger on each button; a module whose
+   // speed setting is above 20 a second raises it for the tick it acts in, so its clicks can go out back to back.
+   private static int burst = 1;
+   private static int uses;
+   private static int attacks;
+   private static int slotChanges;
+   private static boolean inClick;
+   private static boolean clickCounted;
    private static final int AFTER_INVENTORY = 4;
    private static int worldTick = -1;
    private static float sentYaw = Float.NaN;
@@ -38,11 +46,49 @@ public final class ClickGate {
    }
 
    public static boolean canUse() {
-      return useTick != tick && !slotChangedThisTick() && !inventoryRecently();
+      return usesThisTick() < burst && !slotChangedThisTick() && !inventoryRecently();
    }
 
    public static boolean canAttack() {
-      return attackTick != tick && useTick != tick && !slotChangedThisTick() && !inventoryRecently();
+      return attacksThisTick() < burst && (useTick != tick || burst > 1) && !slotChangedThisTick() && !inventoryRecently();
+   }
+
+   // Up to this many clicks of each kind in the current tick (1 to 3). Only ever raises the limit; it drops back to 1
+   // when the next tick starts.
+   public static void allowBurst(int clicks) {
+      burst = Math.max(burst, Math.max(1, Math.min(3, clicks)));
+   }
+
+   public static int burst() {
+      return burst;
+   }
+
+   // Right clicks that went out this tick. A click is counted once however many packets it took - vanilla sends a
+   // block click and then an item use for the same press when the block does nothing.
+   public static int usesThisTick() {
+      return useTick == tick ? uses : 0;
+   }
+
+   public static int attacksThisTick() {
+      return attackTick == tick ? attacks : 0;
+   }
+
+   private static int slotChangesThisTick() {
+      return slotTick == tick ? slotChanges : 0;
+   }
+
+   static void clickStart() {
+      inClick = true;
+      clickCounted = false;
+   }
+
+   static void clickEnd() {
+      inClick = false;
+   }
+
+   // Clicks per tick a speed setting asks for: 20 a second is one every tick, anything above needs more than one.
+   public static int perTick(double perSecond) {
+      return Math.max(1, Math.min(3, (int)Math.ceil(perSecond / 20.0 - 1.0E-9)));
    }
 
    public static boolean canClickInventory() {
@@ -58,7 +104,12 @@ public final class ClickGate {
    }
 
    public static boolean canSwitchSlot() {
-      return clickTick != tick && slotTick != tick && !inventoryRecently();
+      if (inventoryRecently()) {
+         return false;
+      } else {
+         // In a burst a switch may follow a click in the same tick: place an anchor, take the glowstone, charge it.
+         return burst > 1 ? slotChangesThisTick() <= burst : clickTick != tick && slotTick != tick;
+      }
    }
 
    public static boolean clickedThisTick() {
@@ -69,7 +120,7 @@ public final class ClickGate {
    // buttons in the same tick, so a switch and a click in one tick is something a player can do; Stealth's
    // same-tick-switch allows it, otherwise the click waits a tick after the switch.
    public static boolean slotChangedThisTick() {
-      return slotTick == tick && !Stealth.sameTickSwitch();
+      return slotTick == tick && burst <= 1 && !Stealth.sameTickSwitch();
    }
 
    private static void noteWorldAction(Send event) {
@@ -101,6 +152,7 @@ public final class ClickGate {
    )
    private static void onTickStart(Pre event) {
       tick++;
+      burst = 1;
       // A number key or the scroll wheel changes the selected slot without a packet; vanilla only sends it later in
       // this tick. Sending it now marks slotTick, so no module clicks in the same tick as that switch.
       if (mc.field_1724 != null && mc.field_1761 != null) {
@@ -115,28 +167,48 @@ public final class ClickGate {
       noteWorldAction(event);
       if (event.packet instanceof class_2824 packet) {
          if ("ATTACK".equals(String.valueOf(((IPlayerInteractEntityC2SPacket)packet).meteor$getType()))) {
-            attackTick = tick;
+            noteAttack();
          } else {
-            useTick = tick;
+            noteUse();
          }
 
          clickTick = tick;
       } else if (event.packet instanceof class_2885 || event.packet instanceof class_2886) {
-         useTick = tick;
+         noteUse();
          clickTick = tick;
       } else if (event.packet instanceof class_2813) {
          inventoryTick = tick;
       } else if (event.packet instanceof class_2868) {
-         slotTick = tick;
+         noteSlotChange();
       } else if (event.packet instanceof class_2846 action) {
          if (action.method_12363() == class_2847.field_12969) {
-            slotTick = tick;
+            noteSlotChange();
          } else if (action.method_12363() == class_2847.field_12974) {
-            useTick = tick;
-            attackTick = tick;
+            noteUse();
+            noteAttack();
             clickTick = tick;
          }
       }
+   }
+
+   private static void noteUse() {
+      if (inClick && clickCounted) {
+         return;
+      } else {
+         clickCounted = inClick;
+         uses = useTick == tick ? uses + 1 : 1;
+         useTick = tick;
+      }
+   }
+
+   private static void noteAttack() {
+      attacks = attackTick == tick ? attacks + 1 : 1;
+      attackTick = tick;
+   }
+
+   private static void noteSlotChange() {
+      slotChanges = slotTick == tick ? slotChanges + 1 : 1;
+      slotTick = tick;
    }
 
    static {

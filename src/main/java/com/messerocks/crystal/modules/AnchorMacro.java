@@ -125,11 +125,11 @@ public class AnchorMacro extends CrystalModule {
          ((meteordevelopment.meteorclient.settings.DoubleSetting.Builder)((meteordevelopment.meteorclient.settings.DoubleSetting.Builder)new meteordevelopment.meteorclient.settings.DoubleSetting.Builder()
                   .name("click-speed"))
                .description(
-                  "Clicks per second across the whole cycle - placing, charging, shielding and detonating all draw from this, at an irregular spacing. Applies to a single press too, not just a held key. Two clicks of the macro are at least one tick apart regardless."
+                  "Clicks per second across the whole cycle - placing, charging, shielding and detonating all draw from this. Up to 20 that is one click a tick at most; above 20 several steps go out in the same tick when they need no other look - placing the anchor and charging it, say - up to 3 a tick at 41 and more. Raise Stealth's max-actions-per-second along with it."
                ))
             .defaultValue(20.0)
-            .range(1.0, 20.0)
-            .sliderRange(1.0, 20.0)
+            .range(1.0, 50.0)
+            .sliderRange(1.0, 50.0)
             .build()
       );
    private final Setting<Double> placeSpeed = this.sgGeneral
@@ -137,21 +137,21 @@ public class AnchorMacro extends CrystalModule {
          ((meteordevelopment.meteorclient.settings.DoubleSetting.Builder)((meteordevelopment.meteorclient.settings.DoubleSetting.Builder)new meteordevelopment.meteorclient.settings.DoubleSetting.Builder()
                   .name("place-speed"))
                .description(
-                  "Anchor placements per second, on top of speed - the lower of the two applies. Kept apart from explode-speed because the two want different rates - placing is cheap, detonating is what hurts you."
+                  "Anchor placements per second, on top of click-speed - the lower of the two applies. Kept apart from explode-speed because the two want different rates - placing is cheap, detonating is what hurts you."
                ))
             .defaultValue(20.0)
-            .range(0.5, 20.0)
-            .sliderRange(0.5, 20.0)
+            .range(0.5, 50.0)
+            .sliderRange(0.5, 50.0)
             .build()
       );
    private final Setting<Double> explodeSpeed = this.sgGeneral
       .add(
          ((meteordevelopment.meteorclient.settings.DoubleSetting.Builder)((meteordevelopment.meteorclient.settings.DoubleSetting.Builder)new meteordevelopment.meteorclient.settings.DoubleSetting.Builder()
                   .name("explode-speed"))
-               .description("Detonations per second, on top of speed - the lower of the two applies."))
+               .description("Detonations per second, on top of click-speed - the lower of the two applies."))
             .defaultValue(20.0)
-            .range(0.5, 20.0)
-            .sliderRange(0.5, 20.0)
+            .range(0.5, 50.0)
+            .sliderRange(0.5, 50.0)
             .build()
       );
    private final Setting<Boolean> requireFov = this.sgGeneral
@@ -548,9 +548,9 @@ public class AnchorMacro extends CrystalModule {
                }
 
                this.budget.update((Double)this.cyclesPerSecond.get(), 1);
-               this.speedLimit.update((Double)this.speed.get(), 1);
-               this.placeLimit.update((Double)this.placeSpeed.get(), 1);
-               this.explodeLimit.update((Double)this.explodeSpeed.get(), 1);
+               this.speedLimit.update((Double)this.speed.get(), ClickGate.perTick((Double)this.speed.get()));
+               this.placeLimit.update((Double)this.placeSpeed.get(), ClickGate.perTick((Double)this.placeSpeed.get()));
+               this.explodeLimit.update((Double)this.explodeSpeed.get(), ClickGate.perTick((Double)this.explodeSpeed.get()));
                if (this.working != null) {
                   KeyPriority.hold();
                   // A press during a running cycle starts the next one once this cycle is done, instead of being lost.
@@ -558,7 +558,7 @@ public class AnchorMacro extends CrystalModule {
                      this.pressQueued = true;
                   }
 
-                  this.runAt(this.working);
+                  this.runBurst();
                } else {
                   boolean start = this.trigger.get() == AnchorMacro.Trigger.Hold ? pressed : justPressed || this.pressQueued;
                   this.pressQueued = false;
@@ -609,6 +609,22 @@ public class AnchorMacro extends CrystalModule {
                   }
                }
             }
+         }
+      }
+   }
+
+   // One step a tick, or with click-speed above 20 as many as the tick may carry: each pass sees the world the last
+   // click predicted (the anchor placed, the charge in), and stops as soon as a pass sends nothing - a step that needs
+   // a different look or the server's answer waits for the next tick as before.
+   private void runBurst() {
+      int burst = ClickGate.perTick((Double)this.speed.get());
+      ClickGate.allowBurst(burst);
+
+      for (int pass = 0; pass < burst && this.working != null; pass++) {
+         int sent = ClickGate.usesThisTick();
+         this.runAt(this.working);
+         if (ClickGate.usesThisTick() == sent) {
+            break;
          }
       }
    }
@@ -738,7 +754,7 @@ public class AnchorMacro extends CrystalModule {
       this.sightTicks = 0;
       this.slotTicks = 0;
       AnchorActions.resetTurn(this);
-      this.runAt(spot);
+      this.runBurst();
    }
 
    private AnchorMacro.AnchorState stateAt(class_2338 pos) {
@@ -1162,7 +1178,8 @@ public class AnchorMacro extends CrystalModule {
                return false;
             } else {
                this.nextCost = Double.NaN;
-               int gap = AnchorActions.stepGap();
+               // While this tick may still carry another of the macro's clicks, the next step may follow at once.
+               int gap = ClickGate.usesThisTick() + 1 < ClickGate.burst() ? 0 : AnchorActions.stepGap();
                this.nextClickTick = this.ticks + gap;
                this.sightings.pace(gap);
                return true;

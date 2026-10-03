@@ -50,9 +50,11 @@ public final class VanillaClick {
          mc.field_1724.method_36457((float)LegitPlace.currentPitch());
 
          class_1268 var4;
+         ClickGate.clickStart();
          try {
             var4 = chain(hit, visibleSwing);
          } finally {
+            ClickGate.clickEnd();
             mc.field_1724.method_36456(viewYaw);
             mc.field_1724.method_36457(viewPitch);
          }

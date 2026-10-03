@@ -8,6 +8,7 @@ import java.util.function.Predicate;
 import meteordevelopment.meteorclient.utils.player.Rotations;
 import meteordevelopment.meteorclient.utils.world.BlockUtils;
 import net.minecraft.class_1268;
+import net.minecraft.class_1297;
 import net.minecraft.class_1301;
 import net.minecraft.class_1675;
 import net.minecraft.class_1750;
@@ -244,10 +245,27 @@ public final class LegitPlace {
       }
    }
 
+   // Entities a ray may pass through while it is set: a crystal already hit, gone on the server before the next click
+   // gets there, only still drawn here until the server's answer arrives.
+   private static Predicate<class_1297> passThrough = null;
+
+   public static <T> T passingThrough(Predicate<class_1297> gone, java.util.function.Supplier<T> work) {
+      Predicate<class_1297> before = passThrough;
+      passThrough = before == null ? gone : before.or(gone);
+
+      try {
+         return work.get();
+      } finally {
+         passThrough = before;
+      }
+   }
+
    private static class_3966 firstEntity(class_243 eyes, class_243 end, double limitSq) {
       class_243 stretch = end.method_1020(eyes);
       class_238 search = mc.field_1724.method_5829().method_18804(stretch).method_1009(1.0, 1.0, 1.0);
-      class_3966 hit = class_1675.method_18075(mc.field_1724, eyes, end, search, class_1301.field_52443, limitSq);
+      Predicate<class_1297> gone = passThrough;
+      Predicate<class_1297> blocks = gone == null ? class_1301.field_52443 : class_1301.field_52443.and(entity -> !gone.test(entity));
+      class_3966 hit = class_1675.method_18075(mc.field_1724, eyes, end, search, blocks, limitSq);
       if (hit == null) {
          return null;
       } else {

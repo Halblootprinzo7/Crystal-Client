@@ -460,7 +460,8 @@ public class SwordPlace extends CrystalModule {
          boolean sent = false;
          if (this.mc.field_1724.method_5998(hand).method_31574(class_1802.field_8281) && Stealth.claimUse()) {
             // use() returns null when nothing went out (breaking a block, riding); only a sent click uses the press up.
-            sent = VanillaClick.use(hit, (Boolean)this.swing.get()) != null || !ClickGate.canUse();
+            int usesBefore = ClickGate.usesThisTick();
+            sent = VanillaClick.use(hit, (Boolean)this.swing.get()) != null || ClickGate.usesThisTick() > usesBefore;
          }
 
          if (silent != null && this.borrowed == null) {
