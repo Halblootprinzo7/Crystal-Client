@@ -1,6 +1,7 @@
 package dev.crystaladdon.mixin;
 
 import dev.crystaladdon.utils.ClickGate;
+import dev.crystaladdon.utils.HotbarSwap;
 import dev.crystaladdon.utils.TurnProgress;
 import java.util.Arrays;
 import meteordevelopment.meteorclient.mixin.KeyBindingAccessor;
@@ -38,16 +39,18 @@ public abstract class OwnClickMixin {
    )
    private void crystal$holdPresses(CallbackInfo ci) {
       boolean mismatched = TurnProgress.SHARED.ownClickMismatched();
+      // A module's silent loan switched the slot this tick: the player's click would use the borrowed item.
+      boolean lent = HotbarSwap.lentThisTick();
       KeyBindingAccessor attack = (KeyBindingAccessor)this.field_1690.field_1886;
       KeyBindingAccessor use = (KeyBindingAccessor)this.field_1690.field_1904;
       this.crystal$heldAttacks = 0;
       this.crystal$heldUses = 0;
-      if (mismatched || !ClickGate.canAttack()) {
+      if (mismatched || lent || !ClickGate.canAttack()) {
          this.crystal$heldAttacks = attack.meteor$getTimesPressed();
          attack.meteor$setTimesPressed(0);
       }
 
-      if (mismatched || !ClickGate.canUse()) {
+      if (mismatched || lent || !ClickGate.canUse()) {
          this.crystal$heldUses = use.meteor$getTimesPressed();
          use.meteor$setTimesPressed(0);
       }
@@ -106,7 +109,7 @@ public abstract class OwnClickMixin {
       cancellable = true
    )
    private void crystal$waitForLookAttack(CallbackInfoReturnable<Boolean> cir) {
-      if (TurnProgress.SHARED.ownClickMismatched() || !ClickGate.canAttack()) {
+      if (TurnProgress.SHARED.ownClickMismatched() || HotbarSwap.lentThisTick() || !ClickGate.canAttack()) {
          cir.setReturnValue(false);
       }
    }
@@ -117,7 +120,7 @@ public abstract class OwnClickMixin {
       cancellable = true
    )
    private void crystal$waitForLookUse(CallbackInfo ci) {
-      if (TurnProgress.SHARED.ownClickMismatched() || !ClickGate.canUse()) {
+      if (TurnProgress.SHARED.ownClickMismatched() || HotbarSwap.lentThisTick() || !ClickGate.canUse()) {
          ci.cancel();
       }
    }

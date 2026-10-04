@@ -207,7 +207,7 @@ public class AnchorMacro extends CrystalModule {
          ((meteordevelopment.meteorclient.settings.IntSetting.Builder)((meteordevelopment.meteorclient.settings.IntSetting.Builder)((meteordevelopment.meteorclient.settings.IntSetting.Builder)new meteordevelopment.meteorclient.settings.IntSetting.Builder()
                      .name("cycle-timeout"))
                   .description(
-                     "Ticks a cycle may run before it is given up on. Ticks spent waiting for speed, place-speed or explode-speed, for a reaction time, for you to stop walking, for you to look back at a spot you turned away from, or for a hotbar slot to stand its tick before the click do not count - the last three have a limit of the same length of their own. The state machine retries by itself when the server refuses a step - it simply sees the spot is still empty next tick - so this only catches a spot that can never work."
+                     "Ticks a cycle may run before it is given up on. Ticks spent waiting for speed, place-speed or explode-speed, for a reaction time, for you to stop walking, for you to look back at a spot you turned away from, or for a hotbar slot to stand its tick before the click (Stealth's same-tick-switch off) do not count - the last three have a limit of the same length of their own. The state machine retries by itself when the server refuses a step - it simply sees the spot is still empty next tick - so this only catches a spot that can never work."
                   ))
                .defaultValue(20))
             .min(1)
@@ -245,7 +245,7 @@ public class AnchorMacro extends CrystalModule {
          ((meteordevelopment.meteorclient.settings.EnumSetting.Builder)((meteordevelopment.meteorclient.settings.EnumSetting.Builder)((meteordevelopment.meteorclient.settings.EnumSetting.Builder)new meteordevelopment.meteorclient.settings.EnumSetting.Builder()
                      .name("switch-mode"))
                   .description(
-                     "Hotbar really moves your selection onto anchor and glowstone, the way you would yourself - the number key a tick before the click, while the head still turns or the pace runs out, since a slot has to stand a tick before it clicks. Silent goes back to your slot once a few ticks have passed without a click; its click comes a tick after the switch."
+                     "Hotbar really moves your selection onto anchor and glowstone, the way you would yourself - the number key ahead of the click, while the head still turns or the pace runs out. Silent goes back to your slot once a few ticks have passed without a click. With Stealth's same-tick-switch off a slot has to stand a tick before it clicks, so a Silent click then comes a tick after the switch."
                   ))
                .defaultValue(AnchorMacro.SwitchMode.Hotbar))
             .build()
@@ -505,6 +505,15 @@ public class AnchorMacro extends CrystalModule {
 
    @EventHandler
    private void onTick(Pre event) {
+      this.tick();
+      // The press claimed KeyPriority the moment it came in (onKey). One that started no cycle - no spot, the Nether
+      // guard, a blast still showing - lets the auras back in within the same tick.
+      if (this.working == null) {
+         KeyPriority.release(this);
+      }
+   }
+
+   private void tick() {
       if (this.isActive()) {
          if (this.mc.field_1724 != null && this.mc.field_1687 != null && this.mc.field_1761 != null) {
             if (this.sessionChanged()) {
@@ -557,7 +566,7 @@ public class AnchorMacro extends CrystalModule {
                this.placeLimit.update((Double)this.placeSpeed.get(), ClickGate.perTick((Double)this.placeSpeed.get()));
                this.explodeLimit.update((Double)this.explodeSpeed.get(), ClickGate.perTick((Double)this.explodeSpeed.get()));
                if (this.working != null) {
-                  KeyPriority.hold();
+                  KeyPriority.hold(this);
                   // A press during a running cycle starts the next one once this cycle is done, instead of being lost.
                   if (justPressed && this.trigger.get() == AnchorMacro.Trigger.Press) {
                      this.pressQueued = true;
@@ -634,10 +643,14 @@ public class AnchorMacro extends CrystalModule {
       }
    }
 
+   // The press claims KeyPriority as it comes in, not in the tick that starts the cycle: modules of equal priority
+   // run in an order that changes between launches, and an aura running ahead of the macro in that tick would take
+   // its slot change or its click. onTick lets go again in that same tick if no cycle starts.
    @EventHandler
    private void onKey(KeyEvent event) {
       if (event.action == KeyAction.Press && this.mc.field_1755 == null && ((Keybind)this.bind.get()).matches(event.input)) {
          this.pressLatched = true;
+         KeyPriority.hold(this);
       }
    }
 
@@ -645,6 +658,7 @@ public class AnchorMacro extends CrystalModule {
    private void onMouse(MouseClickEvent event) {
       if (event.action == KeyAction.Press && this.mc.field_1755 == null && ((Keybind)this.bind.get()).matches(event.input)) {
          this.pressLatched = true;
+         KeyPriority.hold(this);
       }
    }
 
@@ -759,6 +773,9 @@ public class AnchorMacro extends CrystalModule {
       this.sightTicks = 0;
       this.slotTicks = 0;
       AnchorActions.resetTurn(this);
+      // Before the first step, not from the next tick on: an aura that runs after the macro in this tick would
+      // otherwise still take the click or the slot change the step needs.
+      KeyPriority.hold(this);
       this.runBurst();
    }
 
@@ -1098,7 +1115,7 @@ public class AnchorMacro extends CrystalModule {
 
    private void finish() {
       if (this.working != null) {
-         KeyPriority.release();
+         KeyPriority.release(this);
       }
 
       this.unsafeWarned = false;
@@ -1116,6 +1133,9 @@ public class AnchorMacro extends CrystalModule {
       this.sightTicks = 0;
       this.slotTicks = 0;
       AnchorActions.resetTurn(this);
+      // The cycle's last look is of no further use: hand the head back now instead of after Meteor's rotation hold,
+      // so a Crosshair Auto Crystal sees along your camera again right away.
+      TurnProgress.SHARED.releaseHold(this);
       if (this.returnSlot != -1 && !this.restorePending) {
          this.restorePending = true;
          this.restoreAt = this.ticks + AnchorActions.stepGap();

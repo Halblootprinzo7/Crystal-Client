@@ -158,7 +158,7 @@ public class AutoCrystal extends CrystalModule {
          ((meteordevelopment.meteorclient.settings.EnumSetting.Builder)((meteordevelopment.meteorclient.settings.EnumSetting.Builder)((meteordevelopment.meteorclient.settings.EnumSetting.Builder)new meteordevelopment.meteorclient.settings.EnumSetting.Builder()
                      .name("switch-mode"))
                   .description(
-                     "Hotbar really moves your selection onto the crystal. Silent goes back to the slot you had by itself, a few quiet ticks after the exchange is over - never in the tick of a click, the way a number key cannot either. Either way the crystals are selected a tick before the first click with them: a number key and a click in the same 50 ms is more than a hand does."
+                     "Hotbar really moves your selection onto the crystal. Silent goes back to the slot you had by itself, a few quiet ticks after the exchange is over - never in the tick of a click, the way a number key cannot either. With Stealth's same-tick-switch on (the default) the first click with the crystals may follow the switch in the same tick, as a number key and a click within one tick do in vanilla; off, the crystals are selected a tick before it."
                   ))
                .defaultValue(AutoCrystal.SwitchMode.Silent))
             .build()
@@ -227,7 +227,7 @@ public class AutoCrystal extends CrystalModule {
       .add(
          ((Builder)((Builder)((Builder)new Builder().name("place-speed"))
                   .description(
-                     "Placements per second, 1 to 50. Up to 20 that is one right click a tick at most; above 20 a click may follow another in the same tick - a hit and the new crystal on that obsidian, a slot switch and the placement. Stealth's max-actions-per-second caps all clicks together, raise it along with this."
+                     "Placements per second, 1 to 50. Up to 20 that is one right click a tick at most; above 20 a click may follow another in the same tick - a hit and the new crystal on that obsidian. A slot switch and then the placement already share a tick at any speed with Stealth's same-tick-switch on. Stealth's max-actions-per-second caps all clicks together, raise it along with this."
                   ))
                .defaultValue(8.0)
                .range(1.0, 50.0)
@@ -319,7 +319,7 @@ public class AutoCrystal extends CrystalModule {
    private final Setting<Double> breakSpeed = this.sgBreak
       .add(
          ((Builder)((Builder)((Builder)new Builder().name("break-speed"))
-                  .description("Hits per second, 1 to 50. Up to 20 that is one hit a tick at most; above 20 a hit may go out in the same tick as a right click or a slot switch. Stealth's max-actions-per-second caps all clicks together."))
+                  .description("Hits per second, 1 to 50. Up to 20 that is one hit a tick at most; above 20 a hit may also follow a right click, and a slot switch may follow the hit, in the same tick. A switch right before the hit already shares its tick at any speed with Stealth's same-tick-switch on. Stealth's max-actions-per-second caps all clicks together."))
                .defaultValue(8.0)
                .range(1.0, 50.0)
                .sliderRange(1.0, 50.0)

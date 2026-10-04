@@ -24,8 +24,10 @@ public final class ReactionClock {
    public boolean ready(Object key) {
       long[] entry = this.seen.get(key);
       if (entry == null) {
-         this.seen.put(key, new long[]{this.now + Stealth.reactionTicks(), this.now});
-         return false;
+         // reaction-time 0 answers in the tick the thing is first seen, not the one after.
+         long readyAt = this.now + Stealth.reactionTicks();
+         this.seen.put(key, new long[]{readyAt, this.now});
+         return this.now >= readyAt;
       } else {
          entry[1] = this.now;
          return this.now >= entry[0];

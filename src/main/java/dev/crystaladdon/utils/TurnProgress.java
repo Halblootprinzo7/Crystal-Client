@@ -9,7 +9,6 @@ import meteordevelopment.meteorclient.events.packets.PacketEvent.Send;
 import meteordevelopment.meteorclient.events.world.TickEvent.Pre;
 import meteordevelopment.meteorclient.mixin.KeyBindingAccessor;
 import meteordevelopment.meteorclient.systems.config.Config;
-import meteordevelopment.meteorclient.utils.misc.input.Input;
 import meteordevelopment.meteorclient.utils.player.Rotations;
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.class_2824;
@@ -47,6 +46,9 @@ public final class TurnProgress {
    private int planTicks;
    private int planStep;
    private Object owner;
+   // The requester whose look the server has now, kept after its turn is over (finishTurn clears owner): it may end
+   // the hold on that look early through releaseHold.
+   private Object lookOwner;
    private int ownerLastCallTick = -1;
    private int ownerPriority;
    public static final int DEFAULT_PRIORITY = 50;
@@ -178,6 +180,7 @@ public final class TurnProgress {
          this.blocked = false;
          double cap = Stealth.turnCap();
          if (cap <= 0.0) {
+            this.lookOwner = requester;
             this.queue(yaw, pitch);
             this.finishTurn(yaw, pitch);
             if (action != null) {
@@ -190,6 +193,7 @@ public final class TurnProgress {
             this.plan(yaw, pitch, cap, smooth);
             this.planStep++;
             if (this.planStep >= this.planTicks) {
+               this.lookOwner = requester;
                this.queue(yaw, pitch);
                this.finishTurn(yaw, pitch);
                if (action != null) {
@@ -214,6 +218,7 @@ public final class TurnProgress {
                this.noteTickRotation(stepYaw, stepPitch);
                this.lastSentTick = mc.field_1724.field_6012;
                this.lastModuleTick = mc.field_1724.field_6012;
+               this.lookOwner = requester;
                this.queued = null;
                this.easing = true;
                this.sentYaw = stepYaw;
@@ -366,13 +371,19 @@ public final class TurnProgress {
    // or a held use button whose repeat comes due now (vanilla repeats a held use every 4 ticks, on the tick
    // itemUseCooldown runs out). Merely holding a button is not one - a held attack never repeats, and holding the
    // sword button through a fight must not stop every module for as long as it is down.
+   // The held repeat is read the way vanilla reads it: the key binding's state, not the raw button, and not while an
+   // item is in use. Sword Place and AutoBlock clear that state for a press they took, and vanilla then never
+   // repeats - the raw button would report a click every tick that never comes.
    public static boolean ownClickPending() {
       class_315 options = mc.field_1690;
       if (((KeyBindingAccessor)options.field_1886).meteor$getTimesPressed() > 0
          || ((KeyBindingAccessor)options.field_1904).meteor$getTimesPressed() > 0) {
          return true;
       } else {
-         return Input.isPressed(options.field_1904) && ((MinecraftClientAccessor)mc).crystal$getItemUseCooldown() <= 1;
+         return options.field_1904.method_1434()
+            && mc.field_1724 != null
+            && !mc.field_1724.method_6115()
+            && ((MinecraftClientAccessor)mc).crystal$getItemUseCooldown() <= 1;
       }
    }
 
@@ -551,9 +562,24 @@ public final class TurnProgress {
       }
    }
 
+   // The requester is done with the look it last sent - the anchor macro at the end of a cycle. Meteor would keep the
+   // server on that look for its rotation-hold ticks, and a module that only clicks along the camera (Crosshair
+   // Auto Crystal) would find nothing along it all that time; easeBack starts bringing the look home on the next tick
+   // instead. A look another requester has sent since is left alone.
+   public void releaseHold(Object requester) {
+      if (mc.field_1724 != null && requester != null) {
+         this.forgetIfNewPlayer();
+         if (this.lookOwner == requester && this.easing) {
+            int hold = Math.max(1, (Integer)Config.get().rotationHoldTicks.get());
+            this.lastModuleTick = Math.min(this.lastModuleTick, mc.field_1724.field_6012 - hold);
+         }
+      }
+   }
+
    private void forgetIfNewPlayer() {
       if (mc.field_1724 != this.player) {
          this.reset();
+         this.lookOwner = null;
          this.lastSentTick = -1;
          this.lastModuleTick = -1;
          this.packetYaw = Double.NaN;

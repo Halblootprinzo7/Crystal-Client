@@ -41,7 +41,7 @@ public class Stealth extends CrystalModule {
          ((meteordevelopment.meteorclient.settings.DoubleSetting.Builder)((meteordevelopment.meteorclient.settings.DoubleSetting.Builder)new meteordevelopment.meteorclient.settings.DoubleSetting.Builder()
                   .name("max-turn-per-tick"))
                .description(
-                  "Degrees the head may turn per tick at the fastest point of a turn. 90 is already a very fast flick; up to 180 turns onto anything in front of you within a single tick."
+                  "Degrees the head may turn per tick at the fastest point of a turn. A turn within this lands in one tick; a wider one is spread over several, and the click waits for its end - at 45 and aim-smoothness 0.7 a 46 to 90 degree turn takes 4 ticks. 90 is already a very fast flick; up to 180 turns onto anything in front of you within a single tick."
                ))
             .defaultValue(45.0)
             .range(5.0, 180.0)
@@ -77,7 +77,7 @@ public class Stealth extends CrystalModule {
          ((meteordevelopment.meteorclient.settings.DoubleSetting.Builder)((meteordevelopment.meteorclient.settings.DoubleSetting.Builder)new meteordevelopment.meteorclient.settings.DoubleSetting.Builder()
                   .name("aim-smoothness"))
                .description(
-                  "How much the turn follows a human reaching curve instead of a straight ramp. 0 turns at constant top speed and arrives soonest; 1 accelerates and decelerates like an arm, which takes about 1.9x as long for the same angle."
+                  "How much the turn follows a human reaching curve instead of a straight ramp. 0 turns at constant top speed and arrives soonest; 1 accelerates and decelerates like an arm, which takes about 1.9x as long for the same angle. Only turns wider than max-turn-per-tick are affected - anything within it lands in one tick either way."
                ))
             .defaultValue(0.7)
             .range(0.0, 1.0)
@@ -99,9 +99,9 @@ public class Stealth extends CrystalModule {
          ((meteordevelopment.meteorclient.settings.DoubleSetting.Builder)((meteordevelopment.meteorclient.settings.DoubleSetting.Builder)new meteordevelopment.meteorclient.settings.DoubleSetting.Builder()
                   .name("max-actions-per-second"))
                .description(
-                  "Clicks per second across all modules together, left and right button counted together. 40 lets both buttons click every tick; above that only a module whose own speed is set above 20 clicks more than once a tick."
+                  "Clicks per second across all modules together, left and right button counted together, so keep it at least the crystal aura's place-speed plus break-speed. After a pause up to one second's worth is saved up, so a short burst is not slowed. 20 is one click a tick on average; 40 lets both buttons click every tick; above that only a module whose own speed is set above 20 clicks more than once a tick."
                ))
-            .defaultValue(12.0)
+            .defaultValue(20.0)
             .range(1.0, 100.0)
             .sliderRange(1.0, 100.0)
             .build()
@@ -111,9 +111,21 @@ public class Stealth extends CrystalModule {
          new meteordevelopment.meteorclient.settings.BoolSetting.Builder()
             .name("same-tick-switch")
             .description(
-               "Let a module select a hotbar slot and click with it in the same tick, as when a number key and a mouse button go down within the same 50 ms - vanilla handles the key first, then the click. Off, every click waits a tick after a slot change; on, the anchor macro and the crystal aura save that tick at every item switch."
+               "Let a module select a hotbar slot and click with it in the same tick. A player does the same when a number key and a mouse button go down within one 50 ms tick: vanilla handles the hotbar keys before the use and attack buttons, so the switch goes out first and the click right after it. On, Sword Place, the crystal aura and the anchor macro save a tick at every item switch; off, every click waits a tick after a slot change."
             )
-            .defaultValue(false)
+            .defaultValue(true)
+            .build()
+      );
+   private final Setting<Integer> afterInventory = this.sgPacing
+      .add(
+         ((meteordevelopment.meteorclient.settings.IntSetting.Builder)((meteordevelopment.meteorclient.settings.IntSetting.Builder)((meteordevelopment.meteorclient.settings.IntSetting.Builder)new meteordevelopment.meteorclient.settings.IntSetting.Builder()
+                     .name("after-inventory"))
+                  .description(
+                     "Ticks after an inventory click - a refill, a totem move, your own - before the next world click or hotbar switch, yours included. 4 is about the 200 ms a hand needs from the inventory back to the fight; 1 only keeps the click out of the tick of the inventory click itself."
+                  ))
+               .defaultValue(4))
+            .range(1, 4)
+            .sliderRange(1, 4)
             .build()
       );
    private final Setting<Double> skipChance = this.sgPacing
@@ -196,6 +208,10 @@ public class Stealth extends CrystalModule {
 
    public static boolean sameTickSwitch() {
       return (Boolean)settings().sameTickSwitch.get();
+   }
+
+   public static int afterInventoryTicks() {
+      return (Integer)settings().afterInventory.get();
    }
 
    public static double aimSmoothness() {
