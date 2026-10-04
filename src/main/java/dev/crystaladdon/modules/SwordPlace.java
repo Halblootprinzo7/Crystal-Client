@@ -507,7 +507,9 @@ public class SwordPlace extends CrystalModule {
          }
 
          if (silent != null && this.borrowed == null) {
-            this.back(silent, selected);
+            // Switch and click in one tick (same-tick-switch): the obsidian has done its job, so the hand goes back at
+            // once - the offhand crystals behind it are only usable again with the weapon in the main hand.
+            this.back(silent, selected, sent);
          }
 
          if (sent) {

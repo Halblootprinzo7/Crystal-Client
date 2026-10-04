@@ -5,7 +5,7 @@ Alle Module liegen in Meteor in der Kategorie **Crystal**.
 
 ## Download
 
-**[crystal-addon-1.0.0.jar herunterladen](https://github.com/Halblootprinzo7/Crystal-Client/raw/main/crystal-addon-1.0.0.jar)**
+**[crystal-addon-1.1.0.jar herunterladen](https://github.com/Halblootprinzo7/Crystal-Client/raw/main/crystal-addon-1.1.0.jar)**
 
 Voraussetzungen:
 
@@ -17,7 +17,7 @@ Voraussetzungen:
 ## Installation
 
 1. Fabric Loader für Minecraft 1.21.11 installieren.
-2. Meteor Client und `crystal-addon-1.0.0.jar` in den Ordner `mods` legen.
+2. Meteor Client und `crystal-addon-1.1.0.jar` in den Ordner `mods` legen.
 3. Spiel starten und Meteor mit der rechten Shift-Taste öffnen. Die Module stehen in der Kategorie **Crystal**.
 
 Am besten nur einen Crystal- bzw. Anchor-Optimizer (z. B. ClientSideCrystals, AnchorOptimizer) gleichzeitig verwenden. Mehrere davon können sich gegenseitig stören.
