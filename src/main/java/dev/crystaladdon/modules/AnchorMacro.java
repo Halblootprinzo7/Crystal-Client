@@ -17,7 +17,10 @@ import dev.crystaladdon.utils.VanillaLimits;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.function.BooleanSupplier;
@@ -283,7 +286,7 @@ public class AnchorMacro extends CrystalModule {
       .add(
          ((Builder)((Builder)((Builder)new Builder().name("safe-anchor-key"))
                   .description(
-                     "Key that turns safe-anchor on and off. Unbound by default. It toggles silently - no chat line either way; the module info shows \"unsafe\" while it is off."
+                     "Key that turns safe-anchor on and off. Unbound by default. Each press says in chat which way it went, and the module info shows \"unsafe\" while it is off."
                   ))
                .defaultValue(Keybind.none()))
             .build()
@@ -447,9 +450,38 @@ public class AnchorMacro extends CrystalModule {
    private boolean shieldKeyWasPressed;
    private int returnSlot = -1;
    private String lastShieldProblem;
-   private static final String HIDES_ANCHOR = "a shield there would hide every face of the anchor you could still click to set it off";
+   private static final String HIDES_ANCHOR = "would hide every face of the anchor you could still click";
+   // Stands in for the min-shield-gain reason until the best gain turned down is known.
+   private static final String MIN_GAIN = "min-shield-gain";
+   private static final String NO_TOTEM = "no totem in your offhand";
    private float lastShieldGain;
-   private boolean lastShieldDiagonal;
+   // Which of the candidates the last shield spot was, for the debug line.
+   private String lastShieldNote;
+   // The last search for a shield spot turned a candidate worth having down for something that can clear within a
+   // tick or two - a crystal or a player in the spot or in the way of the click, the face to click just outside the
+   // view-angle, your own walking into it - rather than for the lie of the land.
+   private boolean lastShieldTransient;
+   // Ticks spent waiting this cycle for such a refusal to clear, before the anchor is charged without the shield.
+   private int shieldRetries;
+   private static final int SHIELD_RETRY_TICKS = 3;
+   // A "No shield" line has been reported this cycle; the shield is looked at again on later ticks, the chat only once.
+   private boolean shieldReported;
+   // Ticks of your own walking a shield spot is checked against. The shield only has to stand until the blast, a tick
+   // or two after it goes up, and a glowstone one is broken by that blast - so only the cells your body really enters
+   // in that time count, not everything near the line you walk. Three ticks with a full key push on top of the speed
+   // reached a block and a half ahead and kept the shield off the very line you walk toward the anchor on.
+   private static final int PATH_TICKS = 2;
+   // The anchor itself stands from its placement until the detonation - placed, shielded, charged and set off, with at
+   // least a tick between the clicks - so it has to stay clear of four ticks of your walking: a cell you reach before
+   // then would stop you dead with a charged anchor in it, right in front of you.
+   private static final int ANCHOR_PATH_TICKS = 4;
+   // In BestDamage a spot that drifts into your walking path is given up for another; this many times a press at most,
+   // so a press that keeps finding spots in your way while you run does not set an anchor off long after it was made.
+   private static final int WALK_REPICKS = 3;
+   private int walkRepicks;
+   private int walkTicks;
+   private boolean walkWarned;
+   private boolean faceWarned;
    private class_2338 shieldAssumed;
    private boolean shieldDone;
    private int shieldSentAt;
@@ -463,6 +495,9 @@ public class AnchorMacro extends CrystalModule {
    // click over and removed it on the client, or someone else set it off - the cycle is over: placing again would only
    // throw a second anchor at a spot that has just exploded.
    private boolean sawLoaded;
+   // Tick our charge went out, -1 before it has. The client shows the anchor charged the moment the click leaves, even
+   // on an anchor the server refused, so the charged state only counts as seen once the server had time to answer.
+   private int chargeSentAt = -1;
    private int detonatedAge;
    private boolean spotWaitsOnBlast;
    private boolean pressQueued;
@@ -500,6 +535,7 @@ public class AnchorMacro extends CrystalModule {
       this.detonatedAt = null;
       this.detonatedAge = 0;
       this.pressQueued = false;
+      this.walkRepicks = 0;
       this.heldWarnings.clear();
    }
 
@@ -551,9 +587,17 @@ public class AnchorMacro extends CrystalModule {
                   this.heldWarnings.clear();
                }
 
+               // A fresh press gets its own few re-picks; one queued by giving a spot up does not.
+               if (justPressed) {
+                  this.walkRepicks = 0;
+               }
+
                boolean shieldKeyPressed = ((Keybind)this.shieldBind.get()).isSet() && ((Keybind)this.shieldBind.get()).isPressed();
                if (shieldKeyPressed && !this.shieldKeyWasPressed) {
                   this.shield.set(!(Boolean)this.shield.get());
+                  // Always said, whatever chat-info is: a key brushed by accident would otherwise switch the shield off
+                  // without a trace, and every anchor after it would go off bare.
+                  this.info("Safe-anchor %s.", new Object[]{this.shield.get() ? "on" : "off"});
                }
 
                this.shieldKeyWasPressed = shieldKeyPressed;
@@ -741,6 +785,21 @@ public class AnchorMacro extends CrystalModule {
 
             diagonals.sort(Comparator.comparingDouble(pos -> pos.method_46558().method_1025(eyes)));
             candidates.addAll(diagonals);
+            // An anchor one block up - on obsidian, on a surround block - has nothing but air around the spots at its
+            // own height, and a block cannot be placed against air: one lower, on the floor, still covers your legs and
+            // body. Only where that lower spot is open (for an anchor on the floor it is the floor itself), or where
+            // our own shield already stands, so the "already up" check still recognises it.
+            if (this.mc.field_1687 != null) {
+               for (class_2338 level : new class_2338[]{
+                  beside, spot.method_10079(toPlayer, 2), beside.method_10093(toPlayer.method_10170()), beside.method_10093(toPlayer.method_10160())
+               }) {
+                  class_2338 lower = level.method_10074();
+                  if (this.mc.field_1687.method_8320(lower).method_45474() || lower.equals(this.shieldPlaced)) {
+                     candidates.add(lower);
+                  }
+               }
+            }
+
             return candidates;
          }
       }
@@ -765,6 +824,7 @@ public class AnchorMacro extends CrystalModule {
       this.viewWarned = false;
       this.shieldAssumed = null;
       this.shieldPlaced = null;
+      this.resetCycleNotes();
       this.working = spot;
       this.predicted = null;
       this.predictedAge = 0;
@@ -879,13 +939,33 @@ public class AnchorMacro extends CrystalModule {
 
       AnchorMacro.AnchorState seen = this.worldStateAt(spot);
       if (seen == AnchorMacro.AnchorState.Loaded) {
-         this.sawLoaded = true;
+         // Our own charge shows at once, server or not; only once it has stood long enough for the server's answer
+         // does it say the anchor really was charged.
+         if (this.chargeSentAt < 0 || this.ticks - this.chargeSentAt >= this.predictionWindow()) {
+            this.sawLoaded = true;
+         }
       } else if (seen == AnchorMacro.AnchorState.Air && this.sawLoaded) {
          if ((Boolean)this.debug.get()) {
             this.info("Anchor at %s is gone - cycle done", new Object[]{format(spot)});
          }
 
          this.blastShown = new AnchorMacro.Blast(spot, this.ticks);
+         this.finish();
+         return;
+      } else if (seen == AnchorMacro.AnchorState.Air && this.chargeSentAt >= 0) {
+         // Gone before the server could confirm the charge. Either the server refused the anchor - it then took the
+         // charge as glowstone placed on the empty spot, which usually fills it - or someone set it off within those
+         // few ticks, which leaves air just the same. The two cannot be told apart here, and placing again in the
+         // second case would throw a second anchor at a spot that has just exploded, so the cycle ends either way.
+         if ((Boolean)this.chatInfo.get() || (Boolean)this.debug.get()) {
+            this.report(
+               this.mc.field_1687 != null && !this.mc.field_1687.method_8320(spot).method_45474()
+                  ? "The server refused the anchor at %s, and the charge put glowstone there instead."
+                  : "The anchor at %s is gone before its charge was confirmed - refused by the server, or set off by someone else.",
+               format(spot)
+            );
+         }
+
          this.finish();
          return;
       }
@@ -903,13 +983,26 @@ public class AnchorMacro extends CrystalModule {
       }
 
       if (!unnoticed && !offhandBusy && !outOfSight) {
+         if (this.shieldDone && this.shieldAssumed != null && !this.shieldStands()) {
+            // The server refused the shield, or a blast broke it. Forget it before the safety check, so the rescue
+            // there and the Anchor or Loaded step put it up again - left as done, a shield the shot needs would hold
+            // the anchor until the cycle times out, in either state.
+            if ((Boolean)this.debug.get()) {
+               this.info("Shield at %s is gone - placing it again", new Object[]{format(this.shieldAssumed)});
+            }
+
+            this.shieldDone = false;
+            this.shieldAssumed = null;
+            this.shieldPlaced = null;
+         }
+
          String unsafe = this.unsafeEvenShielded(spot);
          if (unsafe != null && this.worldStateAt(spot) != AnchorMacro.AnchorState.Air) {
             // The anchor already stands: stopping now would leave it - charged, perhaps - right next to you. Wait for
             // the spot to become safe again (you step back, the shield goes up); the cycle timeout still ends it.
             this.waitUnsafe(unsafe);
          } else if (unsafe != null) {
-            if ((Boolean)this.chatInfo.get()) {
+            if ((Boolean)this.chatInfo.get() || (Boolean)this.debug.get()) {
                this.report("Cycle stopped by safe-anchor: %s.", unsafe);
             }
 
@@ -938,8 +1031,25 @@ public class AnchorMacro extends CrystalModule {
                switch (state) {
                   case Air:
                      if (!AnchorActions.findAnchor().found()) {
-                        if ((Boolean)this.chatInfo.get()) {
+                        if ((Boolean)this.chatInfo.get() || (Boolean)this.debug.get()) {
                            this.report("No anchor in the hotbar.");
+                        }
+
+                        this.finish();
+                        return;
+                     }
+
+                     // Before the anchor goes down, not after: an anchor placed without the glowstone to charge it -
+                     // or, with glowstone in the offhand, to fill it - would only be left standing next to you.
+                     int glowstoneNeeded = this.glowstoneNeeded(spot);
+                     if (this.hotbarCount(class_1802.field_8801) < glowstoneNeeded) {
+                        if ((Boolean)this.chatInfo.get() || (Boolean)this.debug.get()) {
+                           this.report(
+                              this.mc.field_1724.method_6079().method_31574(class_1802.field_8801)
+                                 ? "Need %d glowstone in the hotbar - glowstone in your offhand keeps the anchor from going off until it is full."
+                                 : "Need %d glowstone in the hotbar to charge the anchor.",
+                              glowstoneNeeded
+                           );
                         }
 
                         this.finish();
@@ -961,7 +1071,7 @@ public class AnchorMacro extends CrystalModule {
                      }
 
                      if (!AnchorActions.canGrip(class_1802.field_23141, AnchorActions.placeHit(spot, this.mustRotate()))) {
-                        if ((Boolean)this.chatInfo.get()) {
+                        if ((Boolean)this.chatInfo.get() || (Boolean)this.debug.get()) {
                            this.report(
                               "The anchor is only in your offhand, and the item in your main hand would take the click - put an anchor in the hotbar or empty your main hand."
                            );
@@ -971,7 +1081,12 @@ public class AnchorMacro extends CrystalModule {
                         return;
                      }
 
-                     if (!BlockUtils.canPlaceBlock(spot, true, class_2246.field_23152) || this.inYourWay(spot)) {
+                     if (!BlockUtils.canPlaceBlock(spot, true, class_2246.field_23152)) {
+                        return;
+                     }
+
+                     if (this.inYourWay(spot, ANCHOR_PATH_TICKS)) {
+                        this.waitWalking(spot);
                         return;
                      }
 
@@ -988,7 +1103,7 @@ public class AnchorMacro extends CrystalModule {
                      }
 
                      if (!AnchorActions.findGlowstone().found()) {
-                        if ((Boolean)this.chatInfo.get()) {
+                        if ((Boolean)this.chatInfo.get() || (Boolean)this.debug.get()) {
                            this.report(
                               "No glowstone in the hotbar - glowstone in the offhand cannot charge without the main hand setting a charged anchor off."
                            );
@@ -1001,20 +1116,39 @@ public class AnchorMacro extends CrystalModule {
                      // Shield before the charge: both use glowstone, so no extra switch, and the shield's confirmation
                      // runs out while the charge and the switch to the detonator happen instead of after them. If the
                      // shield cannot go up, no charged anchor is left standing either.
-                     if ((Boolean)this.shield.get() && !this.shieldDone) {
-                        AnchorMacro.ShieldStep step = this.placeShieldNow(spot);
-                        if (step == AnchorMacro.ShieldStep.Turning) {
+                     if (this.shieldPending(spot)) {
+                        AnchorMacro.ShieldStep step = this.placeShieldNow(spot, true);
+                        if (step == AnchorMacro.ShieldStep.Turning || step == AnchorMacro.ShieldStep.Retrying) {
                            return;
                         }
 
-                        this.shieldDone = true;
                         if (step == AnchorMacro.ShieldStep.Placed) {
+                           this.shieldDone = true;
                            return;
                         }
+
+                        if (step == AnchorMacro.ShieldStep.Skipped) {
+                           this.shieldDone = true;
+                        } else {
+                           // No shield to be had right now. Charge only if the bare blast is within damage-limit;
+                           // otherwise keep the anchor uncharged, which is harmless, until the shot is safe or the
+                           // cycle times out. shieldDone stays false: the Loaded step looks once more, right before
+                           // the detonation.
+                           String bare = this.safetyProblem(spot, null);
+                           if (bare != null) {
+                              this.waitUnsafe(bare);
+                              return;
+                           }
+                        }
+                     }
+
+                     if (this.anchorUnclickable(spot)) {
+                        return;
                      }
 
                      AnchorActions.charge(spot, this.options(null, () -> {
                         this.predicted = AnchorMacro.AnchorState.Loaded;
+                        this.chargeSentAt = this.ticks;
                         if ((Boolean)this.debug.get()) {
                            this.info("Charged anchor at %s", new Object[]{format(spot)});
                         }
@@ -1026,9 +1160,11 @@ public class AnchorMacro extends CrystalModule {
                         return;
                      }
 
-                     if ((Boolean)this.shield.get() && !this.shieldDone) {
-                        AnchorMacro.ShieldStep step = this.placeShieldNow(spot);
-                        if (step == AnchorMacro.ShieldStep.Turning) {
+                     if (this.shieldPending(spot)) {
+                        // No waiting for a refusal to clear here: the anchor is charged, and one standing next to you
+                        // is anyone's to set off. Whatever comes of it, the safety check below has the last word.
+                        AnchorMacro.ShieldStep step = this.placeShieldNow(spot, false);
+                        if (step == AnchorMacro.ShieldStep.Turning || step == AnchorMacro.ShieldStep.Retrying) {
                            return;
                         }
 
@@ -1038,19 +1174,19 @@ public class AnchorMacro extends CrystalModule {
                         }
                      }
 
+                     // Detonate only once the shield had time to be confirmed; the client shows it the moment the click
+                     // goes out, whether the server accepts it or not. A shield that is gone again was already dropped
+                     // above, before the safety check, and is being placed anew.
                      if (this.shieldDone && this.shieldAssumed != null) {
-                        if (!this.shieldStands()) {
-                           // The server refused the shield (or it was broken): place it again rather than detonating
-                           // as if it stood.
-                           this.shieldDone = false;
-                           this.shieldAssumed = null;
-                           this.shieldPlaced = null;
-                           return;
-                        }
+                        int waited = this.ticks - this.shieldSentAt;
+                        if (waited < this.shieldWaitTicks()) {
+                           // On the last tick of the wait take up the detonator, so the click goes out the moment the
+                           // wait ends instead of a tick later; until then the glowstone stays in hand in case the
+                           // shield has to go up again.
+                           if (waited + 1 >= this.shieldWaitTicks()) {
+                              AnchorActions.preselectDetonator(spot, charges, this.options(this.explodeLimit), detonator);
+                           }
 
-                        // Detonate only once the shield had time to be confirmed; the client shows it the moment the
-                        // click goes out, whether the server accepts it or not.
-                        if (this.ticks - this.shieldSentAt < this.shieldWaitTicks()) {
                            return;
                         }
                      }
@@ -1061,9 +1197,13 @@ public class AnchorMacro extends CrystalModule {
                         return;
                      }
 
+                     if (this.anchorUnclickable(spot)) {
+                        return;
+                     }
+
                      if (AnchorActions.offhandBlocksDetonation(charges)) {
                         if (!AnchorActions.findGlowstone().found()) {
-                           if ((Boolean)this.chatInfo.get()) {
+                           if ((Boolean)this.chatInfo.get() || (Boolean)this.debug.get()) {
                               this.report(
                                  "Glowstone in your offhand keeps the anchor from going off until it is full, and there is none in the hotbar to fill it."
                               );
@@ -1104,6 +1244,122 @@ public class AnchorMacro extends CrystalModule {
       this.unsafeWarned = true;
    }
 
+   // What one cycle notes about itself, cleared when a cycle starts and when it ends.
+   private void resetCycleNotes() {
+      this.shieldRetries = 0;
+      this.shieldReported = false;
+      this.walkTicks = 0;
+      this.walkWarned = false;
+      this.faceWarned = false;
+      this.chargeSentAt = -1;
+   }
+
+   // Whether this pass still has to see to the shield: not dealt with yet this cycle, or skipped while the shot was safe
+   // without it and unsafe since - your health dropped, you stepped closer - with no shield of ours standing.
+   private boolean shieldPending(class_2338 spot) {
+      if (!(Boolean)this.shield.get()) {
+         return false;
+      } else if (!this.shieldDone) {
+         return true;
+      } else {
+         return this.shieldAssumed == null && this.effectiveShield() == null && this.safetyProblem(spot) != null;
+      }
+   }
+
+   // The anchor spot is where you are about to walk, and an anchor there would stop you dead. In BestDamage another spot
+   // may well be out of your way: the cycle ends and the press picks again next tick - WALK_REPICKS times at most, since
+   // every new pick restarts the cycle and its timeout. In Crosshair the spot is the one you aim at, so the step waits
+   // and says why - outside the cycle-timeout, as its description says, but with a limit of the same length of its own,
+   // since the cycle keeps the auras paused for as long as it runs.
+   private void waitWalking(class_2338 spot) {
+      if (this.countedTick) {
+         this.cycleTicks--;
+         this.countedTick = false;
+      }
+
+      if (this.mode.get() == AnchorMacro.Mode.BestDamage) {
+         if (this.trigger.get() == AnchorMacro.Trigger.Press && ++this.walkRepicks > WALK_REPICKS) {
+            if ((Boolean)this.chatInfo.get() || (Boolean)this.debug.get()) {
+               this.report("Gave up: every anchor spot picked for this press moved into where you are walking - stop or step aside and press again.");
+            }
+         } else {
+            if ((Boolean)this.debug.get()) {
+               this.info("Anchor spot %s is where you are walking - picking another", new Object[]{format(spot)});
+            }
+
+            this.pressQueued = this.trigger.get() == AnchorMacro.Trigger.Press;
+         }
+
+         this.finish();
+      } else if (++this.walkTicks > this.cycleTimeout()) {
+         if ((Boolean)this.chatInfo.get() || (Boolean)this.debug.get()) {
+            this.report("Gave up on the spot at %s: it stayed where you are walking - an anchor there would stop you dead.", format(spot));
+         }
+
+         this.finish();
+      } else {
+         if (!this.walkWarned && ((Boolean)this.chatInfo.get() || (Boolean)this.debug.get())) {
+            this.report("Waiting: the anchor spot %s is where you are walking - stop or step aside and it goes down.", format(spot));
+         }
+
+         this.walkWarned = true;
+      }
+   }
+
+   // No face of the anchor can be clicked: you have stepped out of block reach of it, or a player or a crystal is in the
+   // way of each ray, or the shield once you have moved. The click would simply not go out; say so once instead of
+   // running into the cycle timeout in silence. Without rotate, or while the camera is needed, the click goes along your
+   // own view and other lines cover it.
+   private boolean anchorUnclickable(class_2338 spot) {
+      if (!this.mustRotate() || TurnProgress.cameraNeeded() || AnchorActions.hitResultFor(spot, true) != null) {
+         return false;
+      } else {
+         if (!this.faceWarned && ((Boolean)this.chatInfo.get() || (Boolean)this.debug.get())) {
+            // The face search drops every face beyond block reach, so out of reach reads just like covered - but the
+            // cure is the opposite: step back toward the anchor rather than wait.
+            double reach = VanillaLimits.blockRange();
+            double distance = Math.sqrt(new class_238(spot).method_49271(this.mc.field_1724.method_33571()));
+            if (distance > reach) {
+               this.report("The anchor at %s is out of reach (%.1f, reach is %.1f) - step back toward it.", format(spot), distance, reach);
+            } else {
+               this.report(
+                  "No face of the anchor at %s can be clicked - a player, a crystal or a block%s covers every face you could reach; waiting for it to clear.",
+                  format(spot),
+                  this.shieldPlaced != null ? " (the shield, now that you have moved)" : ""
+               );
+            }
+         }
+
+         this.faceWarned = true;
+         return true;
+      }
+   }
+
+   // Glowstone the anchor at pos still needs from the hotbar before it can go off: its charge, or with glowstone in the
+   // offhand a full fill. That glowstone keeps the anchor from going off until it is full and cannot do the filling
+   // itself - the main hand takes a click on the anchor first.
+   private int glowstoneNeeded(class_2338 pos) {
+      int charges = Math.max(0, AnchorActions.charges(pos));
+      if (this.mc.field_1724.method_6079().method_31574(class_1802.field_8801)) {
+         return Math.max(0, AnchorActions.MAX_CHARGES - charges);
+      } else {
+         return charges == 0 ? 1 : 0;
+      }
+   }
+
+   private int hotbarCount(class_1792 item) {
+      int count = 0;
+
+      for (int i = 0; i <= 8; i++) {
+         class_1799 stack = this.mc.field_1724.method_31548().method_5438(i);
+         if (stack.method_31574(item)) {
+            count += stack.method_7947();
+         }
+      }
+
+      return count;
+   }
+
    private int detonationPreference() {
       if (this.returnSlot == -1) {
          return -1;
@@ -1128,6 +1384,7 @@ public class AnchorMacro extends CrystalModule {
       this.viewWarned = false;
       this.shieldAssumed = null;
       this.shieldPlaced = null;
+      this.resetCycleNotes();
       this.cycleTicks = 0;
       this.cameraTicks = 0;
       this.sightTicks = 0;
@@ -1231,7 +1488,10 @@ public class AnchorMacro extends CrystalModule {
          .withAhead(ahead);
    }
 
-   private AnchorMacro.ShieldStep placeShieldNow(class_2338 anchorPos) {
+   // Skipped: deliberately left out (the blast is small, or a shield already stands). Unavailable: none could be put up
+   // this time. mayWait: a refusal that can clear within a tick or two is waited out first, up to SHIELD_RETRY_TICKS a
+   // cycle - only while the anchor is still uncharged, where waiting harms nothing.
+   private AnchorMacro.ShieldStep placeShieldNow(class_2338 anchorPos, boolean mayWait) {
       float bare = BlastShield.anchorDamage(this.mc.field_1724, anchorPos.method_46558());
       if (bare <= (Double)this.shieldSkipBelow.get() && this.safetyProblem(anchorPos, null) == null) {
          if ((Boolean)this.debug.get()) {
@@ -1249,24 +1509,18 @@ public class AnchorMacro extends CrystalModule {
          this.shieldPlaced = null;
          class_2338 spot = this.shieldSpotFor(anchorPos);
          if (spot == null) {
-            if ((Boolean)this.debug.get() || (Boolean)this.chatInfo.get()) {
-               this.report("No shield: %s.", this.lastShieldProblem);
-            }
-
-            return AnchorMacro.ShieldStep.Skipped;
+            return this.shieldRefused(this.lastShieldProblem, this.lastShieldTransient, mayWait);
          } else {
             class_3965 support = this.supportFor(spot, anchorPos);
             if (support == null) {
-               if ((Boolean)this.debug.get() || (Boolean)this.chatInfo.get()) {
-                  this.report(
-                     this.mustRotate()
-                        ? "No shield: no face you can see or reach to click against, other than the anchor."
-                        : "No shield: your view does not land on a face that puts the block at %s - turn rotate on for the shield.",
-                     format(spot)
-                  );
-               }
-
-               return AnchorMacro.ShieldStep.Skipped;
+               // shieldSpotFor found this very face a moment ago: only something stepping into the click loses it.
+               return this.shieldRefused(
+                  this.mustRotate()
+                     ? "the face to click for it was just lost - something is in the way of the click"
+                     : String.format("your view does not land on a face that puts the block at %s - turn rotate on for the shield", format(spot)),
+                  this.mustRotate(),
+                  mayWait
+               );
             } else {
                class_1792 item = ((AnchorMacro.ShieldBlock)this.shieldBlock.get()).item();
                boolean inHotbar = InvUtils.find(stack -> stack.method_31574(item), 0, 8).found();
@@ -1274,24 +1528,20 @@ public class AnchorMacro extends CrystalModule {
                   && !InventoryGuard.offhandInFlight()
                   && VanillaClick.reaches(support, class_1268.field_5810);
                if (!inHotbar && !fromOffhand) {
-                  if ((Boolean)this.chatInfo.get()) {
-                     this.report("No %s in the hotbar for the shield.", item.toString());
-                  }
-
-                  return AnchorMacro.ShieldStep.Skipped;
+                  return this.shieldRefused(String.format("no %s in the hotbar for it", item.toString()), false, mayWait);
                } else {
                   if (this.switchMode.get() == AnchorMacro.SwitchMode.Hotbar) {
                      this.rememberSlot();
                   }
 
+                  // Taken now: the fields belong to whichever search for a shield spot ran last.
+                  String note = this.lastShieldNote;
+                  float gain = this.lastShieldGain;
                   AnchorActions.Options shieldOptions = this.options(
                      null,
                      () -> {
                         if ((Boolean)this.debug.get()) {
-                           this.info(
-                              "Shield at %s%s (blast %.1f, saves %.1f)",
-                              new Object[]{format(spot), this.lastShieldDiagonal ? " diagonal" : "", bare, this.lastShieldGain}
-                           );
+                           this.info("Shield at %s - %s (blast %.1f, saves %.1f)", new Object[]{format(spot), note, bare, gain});
                         }
 
                         this.shieldAssumed = spot;
@@ -1308,6 +1558,27 @@ public class AnchorMacro extends CrystalModule {
                }
             }
          }
+      }
+   }
+
+   // No shield spot this pass. One refused only for a moment - a crystal or player in the spot or in the way of the
+   // click, the face just outside the view-angle, you walking into it - is tried again on the next ticks; anything
+   // else, or once those ticks are used up, the shield is not to be had this time. Said once a cycle, however often it
+   // is looked at again.
+   private AnchorMacro.ShieldStep shieldRefused(String why, boolean transientCause, boolean mayWait) {
+      if (transientCause && mayWait && this.shieldRetries < SHIELD_RETRY_TICKS) {
+         if (this.shieldRetries++ == 0 && (Boolean)this.debug.get()) {
+            this.info("Shield refused for now (%s) - trying again", new Object[]{why});
+         }
+
+         return AnchorMacro.ShieldStep.Retrying;
+      } else {
+         if (!this.shieldReported && ((Boolean)this.debug.get() || (Boolean)this.chatInfo.get())) {
+            this.report("No shield: %s.", why);
+         }
+
+         this.shieldReported = true;
+         return AnchorMacro.ShieldStep.Unavailable;
       }
    }
 
@@ -1329,17 +1600,27 @@ public class AnchorMacro extends CrystalModule {
       return Math.min((Double)this.range.get(), VanillaLimits.blockRange());
    }
 
-   // The space you are about to walk into. A block that is merely clear of your hitbox now still lands right in your
-   // way when you strafe: a tick or two later you run into it and get stuck on it. Velocity alone lags a tick behind
-   // the keys, so the direction your movement keys point counts as well.
-   private boolean inYourWay(class_2338 pos) {
+   // The space your body moves through over the next ticks. A block that is merely clear of your hitbox now still lands
+   // right in your way when you walk or strafe: a tick later you run into it and get stuck on it. Each tick is stepped
+   // the way vanilla's travel() moves you - the speed you carry plus the push of your movement keys, then friction - and
+   // only your hitbox at each of those ticks counts, not one box stretched over the whole sweep, which on a diagonal
+   // covers far more than you pass through. The keys count because velocity lags a tick behind them: the first tick of
+   // a strafe starts from standing still. Their push is vanilla's own (about 0.13 a tick sprinting on the ground), not a
+   // guess on top of the speed you already have.
+   private boolean inYourWay(class_2338 pos, int ticks) {
       class_238 box = this.mc.field_1724.method_5829();
       class_243 velocity = this.mc.field_1724.method_18798();
       double vx = velocity.field_1352;
       double vz = velocity.field_1350;
+      boolean onGround = this.mc.field_1724.method_24828();
+      float slipperiness = onGround ? this.mc.field_1687.method_8320(this.mc.field_1724.method_23314()).method_26204().method_9499() : 1.0F;
+      double pushX = 0.0;
+      double pushZ = 0.0;
       class_241 input = this.mc.field_1724.field_3913.method_3128();
       if (input.field_1343 != 0.0F || input.field_1342 != 0.0F) {
-         // Vanilla's movementInputToVelocity: x is sideways, y forward, turned by the yaw you walk with.
+         // Vanilla's movementInputToVelocity: x is sideways, y forward, turned by the yaw you walk with, never longer
+         // than one. The speed is getMovementSpeed() scaled by the ground's grip, or the fixed air control off the
+         // ground, and the client takes 0.98 of the input.
          double yaw = Math.toRadians(this.mc.field_1724.method_36454());
          double sin = Math.sin(yaw);
          double cos = Math.cos(yaw);
@@ -1347,16 +1628,37 @@ public class AnchorMacro extends CrystalModule {
          double iz = input.field_1342 * cos + input.field_1343 * sin;
          double length = Math.sqrt(ix * ix + iz * iz);
          if (length > 1.0E-4) {
-            vx += ix / length * 0.3;
-            vz += iz / length * 0.3;
+            double speed = onGround
+               ? this.mc.field_1724.method_6029() * (0.21600002F / (slipperiness * slipperiness * slipperiness))
+               : (this.mc.field_1724.method_5624() ? 0.026 : 0.02);
+            double push = speed * 0.98 / Math.max(1.0, length);
+            pushX = ix * push;
+            pushZ = iz * push;
          }
       }
 
-      if (vx * vx + vz * vz < 1.0E-4) {
+      if (vx * vx + vz * vz < 1.0E-4 && pushX == 0.0 && pushZ == 0.0) {
          return false;
       } else {
-         class_238 path = box.method_1012(vx * 3.0, 0.0, vz * 3.0).method_1009(0.05, 0.0, 0.05);
-         return new class_238(pos).method_994(path);
+         double friction = slipperiness * 0.91;
+         class_238 cell = new class_238(pos);
+         double x = 0.0;
+         double z = 0.0;
+
+         for (int tick = 0; tick < ticks; tick++) {
+            vx += pushX;
+            vz += pushZ;
+            x += vx;
+            z += vz;
+            if (cell.method_994(box.method_989(x, 0.0, z))) {
+               return true;
+            }
+
+            vx *= friction;
+            vz *= friction;
+         }
+
+         return false;
       }
    }
 
@@ -1378,7 +1680,7 @@ public class AnchorMacro extends CrystalModule {
                this.spotWaitsOnSight = true;
                return null;
             } else if (AnchorActions.charges(spot) >= 0
-               || AnchorActions.canPlace(spot) && !this.inYourWay(spot) && AnchorActions.placeHit(spot, this.mustRotate()) != null) {
+               || AnchorActions.canPlace(spot) && !this.inYourWay(spot, ANCHOR_PATH_TICKS) && AnchorActions.placeHit(spot, this.mustRotate()) != null) {
                if (!Stealth.allowsBlock(spot, spot.method_46558())) {
                   return null;
                } else if (this.unsafeEvenShielded(spot) != null) {
@@ -1407,6 +1709,7 @@ public class AnchorMacro extends CrystalModule {
             int outOfSight = 0;
             int stealthBlocked = 0;
             int cannotPlace = 0;
+            int inPath = 0;
             int lethal = 0;
             int unsafe = 0;
             int tooWeak = 0;
@@ -1432,8 +1735,10 @@ public class AnchorMacro extends CrystalModule {
                         skippedBlast = true;
                      } else {
                         boolean anchorThere = AnchorActions.charges(pos) >= 0;
-                        if (!anchorThere && (!AnchorActions.canPlace(pos) || this.inYourWay(pos))) {
+                        if (!anchorThere && !AnchorActions.canPlace(pos)) {
                            cannotPlace++;
+                        } else if (!anchorThere && this.inYourWay(pos, ANCHOR_PATH_TICKS)) {
+                           inPath++;
                         } else if (!Stealth.allowsBlock(pos, center)) {
                            stealthBlocked++;
                         } else {
@@ -1495,6 +1800,7 @@ public class AnchorMacro extends CrystalModule {
                            outOfSight,
                            stealthBlocked,
                            cannotPlace,
+                           inPath,
                            lethal,
                            unsafe,
                            unsafeWhy,
@@ -1519,6 +1825,7 @@ public class AnchorMacro extends CrystalModule {
       int outOfSight,
       int stealthBlocked,
       int cannotPlace,
+      int inPath,
       int lethal,
       int unsafe,
       String unsafeWhy,
@@ -1535,6 +1842,8 @@ public class AnchorMacro extends CrystalModule {
          return String.format("%d spots in reach, but none reached min-damage %.1f (best was %.1f)", tooWeak, this.minDamage.get(), bestRejected);
       } else if (lethal > 0) {
          return String.format("%d spots would simply kill you", lethal);
+      } else if (inPath > 0) {
+         return String.format("%d spots are where you are walking - an anchor there would stop you dead", inPath);
       } else if (cannotPlace > 0) {
          return "nowhere an anchor could stand";
       } else if (stealthBlocked > 0) {
@@ -1564,12 +1873,15 @@ public class AnchorMacro extends CrystalModule {
 
    private class_2338 shieldSpotFor(class_2338 anchorPos) {
       this.lastShieldProblem = "no candidate position";
+      this.lastShieldTransient = false;
       if (!(Boolean)this.shield.get()) {
          return null;
       } else if (!this.shieldItemAvailable(anchorPos)) {
          // A spot that is only safe behind a shield must not be approved when there is nothing to build the shield
          // from - the cycle would place and charge the anchor and then have to leave it standing.
-         this.lastShieldProblem = String.format("no %s left for the shield", ((AnchorMacro.ShieldBlock)this.shieldBlock.get()).item().toString());
+         this.lastShieldProblem = String.format(
+            "not enough %s in the hotbar - the cycle needs %d", ((AnchorMacro.ShieldBlock)this.shieldBlock.get()).item().toString(), this.shieldItemNeeded(anchorPos)
+         );
          return null;
       } else {
          List<class_2338> candidates = this.shieldPositions(anchorPos);
@@ -1579,95 +1891,204 @@ public class AnchorMacro extends CrystalModule {
          } else {
             class_243 anchor = anchorPos.method_46558();
             float bare = BlastShield.anchorDamage(this.mc.field_1724, anchor);
-            class_2680 shieldState = ((AnchorMacro.ShieldBlock)this.shieldBlock.get()).block().method_9564();
+            class_2248 block = ((AnchorMacro.ShieldBlock)this.shieldBlock.get()).block();
+            class_2680 shieldState = block.method_9564();
             class_2338 best = null;
             float bestGain = 0.0F;
-            int bestIndex = -1;
+            String bestNote = null;
+            // A glowstone spot your body only reaches on the tick after next is still a shield: the blast breaks it
+            // before you get there, and the anchor sits one block further on that same line anyway. It is only passed
+            // over for a spot out of your way - unless that one alone would not make the shot safe and the spot in your
+            // path would. A spot you step into next tick, or obsidian anywhere on your path, is never used: the first
+            // stops you dead the moment it goes up, the second outlasts the blast and stays in your way for good.
+            class_2338 bestInPath = null;
+            float bestInPathGain = 0.0F;
+            String bestInPathNote = null;
             float bestRejectedGain = -1.0F;
-            boolean hidesAnchor = false;
-            int index = -1;
+            boolean transientRefusal = false;
+            // Why each candidate was turned down, by reason, in the order the candidates are tried - the one beside the
+            // anchor first - so the report names what kept the spots that matter, not whichever was looked at last.
+            Map<String, Set<String>> refused = new LinkedHashMap<>();
 
             for (class_2338 pos : candidates) {
-               index++;
+               String label = shieldLabel(anchorPos, pos);
                if (pos.equals(anchorPos)) {
-                  this.lastShieldProblem = "the only spot left is the anchor position itself";
-               } else if (this.mc.field_1687.method_22347(pos)
-                  || this.mc.field_1687.method_8320(pos).method_45474()
-                     && AnchorActions.canReplaceAt(pos, ((AnchorMacro.ShieldBlock)this.shieldBlock.get()).item())) {
-                  if (!BlockUtils.canPlaceBlock(pos, true, ((AnchorMacro.ShieldBlock)this.shieldBlock.get()).block())) {
-                     this.lastShieldProblem = "the shield spots overlap your own hitbox - step to the middle of your block";
-                  } else if (this.inYourWay(pos)) {
-                     this.lastShieldProblem = "the shield spots are where you are walking - it would stop you dead";
-                  } else {
-                     class_3965 support = this.supportFor(pos, anchorPos);
-                     if (support == null) {
-                        this.lastShieldProblem = "no face you can see or reach to click against there, other than the anchor";
-                     } else if (!Stealth.inView(support.method_17784())) {
-                        this.lastShieldProblem = "the only face to click for it is out of sight - outside Stealth's view-angle";
+                  refuse(refused, "it is the anchor position itself", label);
+               } else if (!this.mc.field_1687.method_22347(pos)
+                  && (
+                     !this.mc.field_1687.method_8320(pos).method_45474()
+                        || !AnchorActions.canReplaceAt(pos, ((AnchorMacro.ShieldBlock)this.shieldBlock.get()).item())
+                  )) {
+                  refuse(refused, "occupied", label);
+               } else {
+                  // A refusal for the lie of the land, or one that can clear within a tick or two - something in the
+                  // spot or in the way of the click, the face just outside the view-angle, your own walking.
+                  String lasting = null;
+                  String passing = null;
+                  class_3965 support = null;
+                  if (!BlockUtils.canPlaceBlock(pos, true, block)) {
+                     if (new class_238(pos).method_994(this.mc.field_1724.method_5829())) {
+                        lasting = "overlaps your own hitbox - step to the middle of your block";
                      } else {
-                        float gain = bare - BlastShield.anchorDamageBehindShield(this.mc.field_1724, anchor, pos, shieldState);
-                        if (gain < (Double)this.minShieldGain.get()) {
-                           bestRejectedGain = Math.max(bestRejectedGain, gain);
-                        } else if (!(gain <= bestGain)) {
+                        passing = "a crystal or player is standing in it";
+                     }
+                  } else if ((support = this.supportFor(pos, anchorPos)) == null) {
+                     if (this.entityBlocksSupport(pos, anchorPos)) {
+                        passing = "a crystal or player is in the way of the click";
+                     } else {
+                        lasting = "no face you can see or reach to click against, other than the anchor";
+                     }
+                  } else if (!Stealth.inView(support.method_17784())) {
+                     passing = "the face to click is out of sight - outside Stealth's view-angle";
+                  }
+
+                  if (lasting != null) {
+                     refuse(refused, lasting, label);
+                  } else {
+                     // The gain before a passing refusal counts as one: a spot that would not save enough anyway must
+                     // not hold the charge back for a shield that could never come of it.
+                     float gain = bare - BlastShield.anchorDamageBehindShield(this.mc.field_1724, anchor, pos, shieldState);
+                     if (gain < (Double)this.minShieldGain.get()) {
+                        bestRejectedGain = Math.max(bestRejectedGain, gain);
+                        refuse(refused, MIN_GAIN, label);
+                     } else if (passing != null) {
+                        refuse(refused, passing, label);
+                        transientRefusal = true;
+                     } else {
+                        boolean inPath = this.inYourWay(pos, PATH_TICKS);
+                        if (inPath && this.inYourWay(pos, 1)) {
+                           refuse(refused, "where you step next tick - it would stop you dead", label);
+                           transientRefusal = true;
+                        } else if (inPath && this.shieldBlock.get() == AnchorMacro.ShieldBlock.Obsidian) {
+                           refuse(refused, "where you are walking - obsidian outlasts the blast and would stay in your way", label);
+                           transientRefusal = true;
+                        } else if (!(gain <= (inPath ? bestInPathGain : bestGain))) {
                            if (!LegitPlace.stillClickable(anchorPos, VanillaLimits.blockRange(), pos)) {
-                              hidesAnchor = true;
-                              this.lastShieldProblem = "a shield there would hide every face of the anchor you could still click to set it off";
+                              refuse(refused, HIDES_ANCHOR, label);
+                           } else if (inPath) {
+                              bestInPath = pos;
+                              bestInPathGain = gain;
+                              bestInPathNote = label;
                            } else {
                               best = pos;
                               bestGain = gain;
-                              bestIndex = index;
+                              bestNote = label;
                            }
                         }
                      }
                   }
-               } else {
-                  this.lastShieldProblem = "every spot between you and the anchor is occupied";
                }
+            }
+
+            if (bestInPath != null
+               && (
+                  best == null
+                     || bestInPathGain > bestGain
+                        && this.safetyProblemFor(bare - bestGain) != null
+                        && this.safetyProblemFor(bare - bestInPathGain) == null
+               )) {
+               best = bestInPath;
+               bestGain = bestInPathGain;
+               bestNote = bestInPathNote + ", in your walking path";
             }
 
             if (best == null) {
-               if (hidesAnchor) {
-                  this.lastShieldProblem = "a shield there would hide every face of the anchor you could still click to set it off";
-               } else if (bestRejectedGain >= 0.0F) {
-                  this.lastShieldProblem = String.format("best spot only saves %.1f, min-shield-gain is %.1f", bestRejectedGain, this.minShieldGain.get());
-               }
+               this.lastShieldProblem = this.describeShieldRefusals(refused, bestRejectedGain);
+               this.lastShieldTransient = transientRefusal;
             }
 
             this.lastShieldGain = bestGain;
-            this.lastShieldDiagonal = bestIndex >= 3;
+            this.lastShieldNote = bestNote;
             return best;
          }
       }
    }
 
-   // Enough of the shield item in the hotbar or offhand. A glowstone shield on an anchor that still needs its charge
-   // needs two: one for the charge, one for the shield.
-   private boolean shieldItemAvailable(class_2338 anchorPos) {
-      class_1792 item = ((AnchorMacro.ShieldBlock)this.shieldBlock.get()).item();
-      int count = this.mc.field_1724.method_6079().method_31574(item) ? this.mc.field_1724.method_6079().method_7947() : 0;
+   private static void refuse(Map<String, Set<String>> refused, String reason, String label) {
+      refused.computeIfAbsent(reason, key -> new LinkedHashSet<>()).add(label);
+   }
 
-      for (int i = 0; i <= 8; i++) {
-         class_1799 stack = this.mc.field_1724.method_31548().method_5438(i);
-         if (stack.method_31574(item)) {
-            count += stack.method_7947();
-         }
+   private String describeShieldRefusals(Map<String, Set<String>> refused, float bestRejectedGain) {
+      List<String> parts = new ArrayList<>();
+
+      for (Map.Entry<String, Set<String>> entry : refused.entrySet()) {
+         String reason = MIN_GAIN.equals(entry.getKey())
+            ? String.format("saves only %.1f, min-shield-gain is %.1f", bestRejectedGain, this.minShieldGain.get())
+            : entry.getKey();
+         parts.add(reason + " (" + String.join(", ", entry.getValue()) + ")");
       }
 
-      int needed = item == class_1802.field_8801 && AnchorActions.charges(anchorPos) <= 0 ? 2 : 1;
-      return count >= needed;
+      return parts.isEmpty() ? "no candidate position" : String.join("; ", parts);
+   }
+
+   // Where a shield candidate sits, the way the report names it: beside the anchor on your side, two out from it, or
+   // diagonal, with +1 or -1 for a block above or below the anchor's own height.
+   private static String shieldLabel(class_2338 anchorPos, class_2338 pos) {
+      int dx = Math.abs(pos.method_10263() - anchorPos.method_10263());
+      int dz = Math.abs(pos.method_10260() - anchorPos.method_10260());
+      int dy = pos.method_10264() - anchorPos.method_10264();
+      String where = dx == 1 && dz == 1 ? "diagonal" : (dx + dz >= 2 ? "two out" : "beside");
+      return dy == 0 ? where : where + (dy > 0 ? " +" : " ") + dy;
+   }
+
+   // No face to click for the shield at pos - but would there be one without the crystals and players in the way?
+   // Asked only to name the reason and to know it may clear; the click itself never passes through an entity. Only
+   // when something other than you is near the line from your eyes to the spot, so open ground costs no second search.
+   private boolean entityBlocksSupport(class_2338 pos, class_2338 anchorPos) {
+      class_238 between = this.mc.field_1724.method_5829().method_991(new class_238(pos)).method_1014(1.0);
+      return !this.mc.field_1687.method_8335(this.mc.field_1724, between).isEmpty()
+         && LegitPlace.passingThrough(entity -> true, () -> this.supportFor(pos, anchorPos)) != null;
+   }
+
+   // The shield item the cycle still needs: one for the shield and, for a glowstone shield, the glowstone the anchor
+   // itself still needs.
+   private int shieldItemNeeded(class_2338 anchorPos) {
+      return ((AnchorMacro.ShieldBlock)this.shieldBlock.get()).item() == class_1802.field_8801 ? 1 + this.glowstoneNeeded(anchorPos) : 1;
+   }
+
+   // The offhand only gets the shield click while the main hand holds nothing that would take it (a sword, a totem, an
+   // empty hand). With Hotbar switching the main hand holds the anchor or the glowstone all cycle, so only the hotbar
+   // counts; with Silent switching it keeps your own item, and obsidian in the offhand is used if that item lets it.
+   // Glowstone in the offhand never counts: it keeps the anchor from going off until it is full, and the hotbar has to
+   // bring all of that.
+   private boolean shieldItemAvailable(class_2338 anchorPos) {
+      class_1792 item = ((AnchorMacro.ShieldBlock)this.shieldBlock.get()).item();
+      int count = this.hotbarCount(item);
+      class_1799 offhand = this.mc.field_1724.method_6079();
+      if (item != class_1802.field_8801
+         && offhand.method_31574(item)
+         && this.switchMode.get() == AnchorMacro.SwitchMode.Silent
+         && VanillaClick.reaches(null, class_1268.field_5810)) {
+         count += offhand.method_7947();
+      }
+
+      return count >= this.shieldItemNeeded(anchorPos);
    }
 
    private class_2338 effectiveShield() {
       return this.shieldStands() ? this.shieldPlaced : null;
    }
 
+   // Whether the shot breaks damage-limit even with the help a shield could still give. The rescue is looked for while
+   // no shield click of ours has gone out this cycle and none stands - also after the shield was skipped as needless or
+   // could not be had, since the shot may have turned unsafe since (your health dropped, you stepped closer). The answer
+   // says why no shield helps, so a refusal does not just read "it would deal X" with the cause left out.
    private String unsafeEvenShielded(class_2338 pos) {
       String problem = this.safetyProblem(pos);
-      if (problem != null && (Boolean)this.shield.get() && !this.shieldDone && this.effectiveShield() == null) {
-         class_2338 rescue = this.shieldSpotFor(pos);
-         return rescue != null && this.safetyProblem(pos, rescue) == null ? null : problem;
-      } else {
+      if (problem == null || !(Boolean)this.shield.get() || NO_TOTEM.equals(problem)) {
          return problem;
+      } else if (this.effectiveShield() != null) {
+         return problem + ", even behind the shield";
+      } else if (this.shieldAssumed != null) {
+         return problem;
+      } else {
+         class_2338 rescue = this.shieldSpotFor(pos);
+         if (rescue == null) {
+            return problem + " - and no shield: " + this.lastShieldProblem;
+         } else {
+            String shielded = this.safetyProblem(pos, rescue);
+            return shielded == null ? null : shielded + ", even behind a shield";
+         }
       }
    }
 
@@ -1705,6 +2126,13 @@ public class AnchorMacro extends CrystalModule {
                return String.format(
                   "Cannot put an anchor at %d %d %d - blocked, or nothing to click against.", spot.method_10263(), spot.method_10264(), spot.method_10260()
                );
+            } else if (AnchorActions.charges(spot) < 0 && this.inYourWay(spot, ANCHOR_PATH_TICKS)) {
+               return String.format(
+                  "The spot %d %d %d is where you are walking - an anchor there would stop you dead. Stop, or aim a little further.",
+                  spot.method_10263(),
+                  spot.method_10264(),
+                  spot.method_10260()
+               );
             } else if (AnchorActions.charges(spot) < 0 && AnchorActions.placeHit(spot, this.mustRotate()) == null) {
                return String.format(
                   "No face to click that puts an anchor at %d %d %d from where you stand - something is in the way of the click.",
@@ -1739,7 +2167,7 @@ public class AnchorMacro extends CrystalModule {
          return null;
       } else {
          return this.requireTotem.get() && !this.mc.field_1724.method_6079().method_31574(class_1802.field_8288)
-            ? "no totem in your offhand"
+            ? NO_TOTEM
             : this.safetyProblemFor(this.selfDamageBehind(pos.method_46558(), shieldAt));
       }
    }
@@ -1748,7 +2176,7 @@ public class AnchorMacro extends CrystalModule {
       if (!(Boolean)this.damageLimit.get()) {
          return null;
       } else if ((Boolean)this.requireTotem.get() && !this.mc.field_1724.method_6079().method_31574(class_1802.field_8288)) {
-         return "no totem in your offhand";
+         return NO_TOTEM;
       } else if (selfDamage > (Double)this.maxSelfDamage.get()) {
          return String.format("it would deal %.1f to you, cap is %.1f", selfDamage, this.maxSelfDamage.get());
       } else {
@@ -1806,8 +2234,13 @@ public class AnchorMacro extends CrystalModule {
 
    private static enum ShieldStep {
       Placed,
+      // Deliberately left out: the blast is small enough, or a shield already stands.
       Skipped,
-      Turning;
+      Turning,
+      // Refused for a moment only; looked at again next tick.
+      Retrying,
+      // None to be had this time.
+      Unavailable;
    }
 
    public static enum SwitchMode {

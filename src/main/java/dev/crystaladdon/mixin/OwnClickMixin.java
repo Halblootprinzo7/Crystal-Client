@@ -1,14 +1,20 @@
 package dev.crystaladdon.mixin;
 
+import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
+import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
+import dev.crystaladdon.modules.AutoCrystal;
 import dev.crystaladdon.utils.ClickGate;
 import dev.crystaladdon.utils.HotbarSwap;
 import dev.crystaladdon.utils.TurnProgress;
 import java.util.Arrays;
 import meteordevelopment.meteorclient.mixin.KeyBindingAccessor;
+import net.minecraft.class_2338;
+import net.minecraft.class_2350;
 import net.minecraft.class_304;
 import net.minecraft.class_310;
 import net.minecraft.class_315;
 import net.minecraft.class_437;
+import net.minecraft.class_636;
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
@@ -132,5 +138,35 @@ public abstract class OwnClickMixin {
    )
    private boolean crystal$waitForLookMining(boolean breaking) {
       return breaking && !TurnProgress.SHARED.ownClickMismatched();
+   }
+
+   // AutoCrystal's no-mining-bases: a left click on obsidian or bedrock with a weapon or crystals in hand only swings.
+   // Mining it would get nowhere and keep every right click back - the aura's next crystal included - for as long as
+   // the button is down. Only the call that starts mining is left out; the swing and any entity hit stay vanilla's.
+   @WrapOperation(
+      method = {"method_1536"},
+      at = {@At(value = "INVOKE", target = "Lnet/minecraft/class_636;method_2910(Lnet/minecraft/class_2338;Lnet/minecraft/class_2350;)Z")}
+   )
+   private boolean crystal$spareBaseOnPress(class_636 manager, class_2338 pos, class_2350 side, Operation<Boolean> original) {
+      return AutoCrystal.sparesBase((class_310)(Object)this) ? false : original.call(manager, pos, side);
+   }
+
+   // The same while the button is held: a press ClickGate put off, or a held button moved onto the base, would start
+   // mining here through updateBlockBreakingProgress. Mining already under way on it - begun with another item in
+   // hand - is let go, as vanilla does once you stop.
+   @Inject(
+      method = {"method_1590"},
+      at = {@At("HEAD")},
+      cancellable = true
+   )
+   private void crystal$spareBaseWhileHeld(boolean breaking, CallbackInfo ci) {
+      if (breaking && AutoCrystal.sparesBase((class_310)(Object)this)) {
+         class_636 manager = ((class_310)(Object)this).field_1761;
+         if (manager != null && manager.method_2923()) {
+            manager.method_2925();
+         }
+
+         ci.cancel();
+      }
    }
 }

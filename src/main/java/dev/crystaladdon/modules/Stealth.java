@@ -288,7 +288,13 @@ public class Stealth extends CrystalModule {
    }
 
    public static boolean claimAttack() {
-      if (mc.field_1761 == null || mc.field_1761.method_2923()) {
+      return claimAttack(false);
+   }
+
+   // Vanilla's attack press (doAttack) has no mining check: a press while a block is being mined still hits what the
+   // crosshair is on, and only the use button waits for mining to end. A module that follows that passes whileMining.
+   public static boolean claimAttack(boolean whileMining) {
+      if (mc.field_1761 == null || !whileMining && mc.field_1761.method_2923()) {
          return false;
       } else {
          return !attackItemHits() ? false : ClickGate.canAttack() && claimAction();
