@@ -218,6 +218,18 @@ public final class AnchorActions {
       }
    }
 
+   // Takes up the detonator ahead of the click, through the same checks as the preselect before any other click, for a
+   // caller that is still waiting before it detonates: the click then goes out the moment the wait ends instead of a
+   // tick after the switch. Nothing while the anchor is not charged or glowstone in the offhand wants it topped up first.
+   public static void preselectDetonator(class_2338 pos, int charges, AnchorActions.Options options, int preferredSlot) {
+      if (mc.field_1724 != null && !offhandBlocksDetonation(charges) && charges(pos) > 0) {
+         int slot = findDetonationSlot(preferredSlot);
+         if (slot >= 0 && !sneakBlocksInteraction(mc.field_1724.method_31548().method_5438(slot))) {
+            preselect(slot, options);
+         }
+      }
+   }
+
    public static String describe(class_2338 pos) {
       if (mc.field_1724 == null) {
          return "no player";
@@ -311,7 +323,7 @@ public final class AnchorActions {
                      if (slot >= 0 && !offhandBlocksDetonation(charges(pos))) {
                         return sneakBlocksInteraction(mc.field_1724.method_31548().method_5438(slot))
                            ? false
-                           : send(click, slot == mc.field_1724.method_31548().method_67532() ? -1 : slot, class_1268.field_5808, options);
+                           : send(click, slot == mc.field_1724.method_31548().method_67532() ? -1 : slot, class_1268.field_5808, options, true);
                      } else {
                         return false;
                      }
@@ -391,7 +403,7 @@ public final class AnchorActions {
                      return false;
                   } else {
                      AnchorActions.Grip grip = gripFor(expected, click);
-                     return grip == null ? false : send(click, grip.slot(), grip.hand(), options);
+                     return grip == null ? false : send(click, grip.slot(), grip.hand(), options, false);
                   }
                }
             };
@@ -419,7 +431,10 @@ public final class AnchorActions {
       }
    }
 
-   private static boolean send(class_3965 click, int slot, class_1268 hand, AnchorActions.Options options) {
+   // countSent: a click vanilla gave no result for still counts once its packet has left - only for the detonation,
+   // which anchor-optimizer mods take over. A placement or charge the client itself refused (an entity in the spot)
+   // must not count as done: it is simply tried again.
+   private static boolean send(class_3965 click, int slot, class_1268 hand, AnchorActions.Options options, boolean countSent) {
       if (!ClickGate.canUse() || Stealth.handsBusy() || Stealth.paused()) {
          return false;
       } else if (InventoryGuard.offhandInFlight()) {
@@ -468,7 +483,7 @@ public final class AnchorActions {
 
                // Anchor-optimizer mods take the detonation click over and remove the anchor on the client at once; the
                // click still reaches the server, but vanilla's result never comes back. A click that left counts.
-               boolean wentOut = acted == null && ClickGate.usesThisTick() > usesBefore;
+               boolean wentOut = countSent && acted == null && ClickGate.usesThisTick() > usesBefore;
                if (acted != hand && !wentOut) {
                   return false;
                } else {

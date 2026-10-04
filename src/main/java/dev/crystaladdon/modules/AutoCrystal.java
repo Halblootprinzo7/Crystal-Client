@@ -48,6 +48,10 @@ import meteordevelopment.meteorclient.settings.SettingGroup;
 import meteordevelopment.meteorclient.settings.DoubleSetting.Builder;
 import meteordevelopment.meteorclient.systems.friends.Friends;
 import meteordevelopment.meteorclient.systems.modules.Modules;
+import meteordevelopment.meteorclient.systems.modules.player.AutoTool;
+import meteordevelopment.meteorclient.systems.modules.player.InstantRebreak;
+import meteordevelopment.meteorclient.systems.modules.world.PacketMine;
+import meteordevelopment.meteorclient.systems.modules.world.VeinMiner;
 import meteordevelopment.meteorclient.utils.Utils;
 import meteordevelopment.meteorclient.utils.entity.DamageUtils;
 import meteordevelopment.meteorclient.utils.entity.EntityUtils;
@@ -77,7 +81,9 @@ import net.minecraft.class_238;
 import net.minecraft.class_243;
 import net.minecraft.class_2824;
 import net.minecraft.class_2879;
+import net.minecraft.class_310;
 import net.minecraft.class_3489;
+import net.minecraft.class_3532;
 import net.minecraft.class_3965;
 import net.minecraft.class_5134;
 import net.minecraft.class_642;
@@ -85,6 +91,7 @@ import net.minecraft.class_6862;
 import net.minecraft.class_9285;
 import net.minecraft.class_9334;
 import net.minecraft.class_1322.class_1323;
+import net.minecraft.class_239.class_240;
 
 public class AutoCrystal extends CrystalModule {
    private final SettingGroup sgGeneral = this.settings.getDefaultGroup();
@@ -190,7 +197,7 @@ public class AutoCrystal extends CrystalModule {
          ((meteordevelopment.meteorclient.settings.BoolSetting.Builder)((meteordevelopment.meteorclient.settings.BoolSetting.Builder)((meteordevelopment.meteorclient.settings.BoolSetting.Builder)new meteordevelopment.meteorclient.settings.BoolSetting.Builder()
                      .name("rotate"))
                   .description(
-                     "Face the crystal before placing or breaking it. Off, the aura only acts where your own view already reaches: a crystal is placed or hit only when the ray from your eyes along the rotation the server has really lands on it. Ignored while aim mode is Crosshair."
+                     "Face the crystal before placing or breaking it. Off, the aura only acts where your own view already reaches: a crystal is placed or hit only when the ray from your eyes along the rotation the server has really lands on it. Aim mode Crosshair never turns to place; it turns only to hit a crystal the server's current look does not land on, and only while also-limit-breaking is off."
                   ))
                .defaultValue(true))
             .build()
@@ -203,6 +210,16 @@ public class AutoCrystal extends CrystalModule {
                      "Render the hand swing client side. Off only hides the animation: the swing packet goes out exactly where vanilla's would either way."
                   ))
                .defaultValue(false))
+            .build()
+      );
+   private final Setting<Boolean> noMiningBases = this.sgGeneral
+      .add(
+         new meteordevelopment.meteorclient.settings.BoolSetting.Builder()
+            .name("no-mining-bases")
+            .description(
+               "A weapon or crystals cannot usefully mine obsidian or bedrock, so a left click on a crystal base with one of them in hand only swings instead of starting to mine it. Mining would pause placing for as long as it goes on. Hold a pickaxe to mine a base. Steps aside while Auto Tool, Packet Mine, Instant Rebreak or Vein Miner is on: they start from that very click."
+            )
+            .defaultValue(true)
             .build()
       );
    private final Setting<Boolean> debug = this.sgGeneral
@@ -229,7 +246,7 @@ public class AutoCrystal extends CrystalModule {
                   .description(
                      "Placements per second, 1 to 50. Up to 20 that is one right click a tick at most; above 20 a click may follow another in the same tick - a hit and the new crystal on that obsidian. A slot switch and then the placement already share a tick at any speed with Stealth's same-tick-switch on. Stealth's max-actions-per-second caps all clicks together, raise it along with this."
                   ))
-               .defaultValue(8.0)
+               .defaultValue(12.0)
                .range(1.0, 50.0)
                .sliderRange(1.0, 50.0)
                .visible(this.place::get))
@@ -320,7 +337,7 @@ public class AutoCrystal extends CrystalModule {
       .add(
          ((Builder)((Builder)((Builder)new Builder().name("break-speed"))
                   .description("Hits per second, 1 to 50. Up to 20 that is one hit a tick at most; above 20 a hit may also follow a right click, and a slot switch may follow the hit, in the same tick. A switch right before the hit already shares its tick at any speed with Stealth's same-tick-switch on. Stealth's max-actions-per-second caps all clicks together."))
-               .defaultValue(8.0)
+               .defaultValue(12.0)
                .range(1.0, 50.0)
                .sliderRange(1.0, 50.0)
                .visible(this.doBreak::get))
@@ -384,7 +401,7 @@ public class AutoCrystal extends CrystalModule {
             .description(
                "Ticks after a crystal is hit before the next one goes on that obsidian - once the client no longer shows the old crystal in the way, as for any player. 0 places in the very same tick as the hit, along the same look and right through the crystal still drawn there, whenever the crystals are already in hand (or with place-speed above 20): faster than any vanilla client, and easier for an anticheat to notice."
             )
-            .defaultValue(2)
+            .defaultValue(1)
             .range(0, 5)
             .sliderRange(0, 5)
             .visible(this.doBreak::get)
@@ -395,7 +412,7 @@ public class AutoCrystal extends CrystalModule {
          ((meteordevelopment.meteorclient.settings.BoolSetting.Builder)((meteordevelopment.meteorclient.settings.BoolSetting.Builder)((meteordevelopment.meteorclient.settings.BoolSetting.Builder)((meteordevelopment.meteorclient.settings.BoolSetting.Builder)new meteordevelopment.meteorclient.settings.BoolSetting.Builder()
                         .name("smart-delay"))
                      .description(
-                        "Respect the target's damage window: for 10 ticks after a hit only the part of a new hit above the last one lands. After your own crystal the aura knows both the timing and the damage itself, a round trip before the client shows it, and only hits a crystal that still deals min-break-damage on top. After a hit from elsewhere it waits the window out."
+                        "Respect the target's damage window: for 10 ticks after a hit only the part of a new hit above the last one lands. After your own crystal, sword hit or a crystal you broke by hand the aura knows both the timing and the damage itself, a round trip before the client shows it: inside the window it only hits a crystal of yours that still adds something on top, or anyone else's that adds min-break-damage. After a hit from elsewhere it waits the window out. Off, crystals go off as soon as they can, which looks faster, but one inside the window deals only what it adds over the last hit - often nothing - so more crystals do not mean more damage."
                      ))
                   .defaultValue(true))
                .visible(this.doBreak::get))
@@ -432,7 +449,9 @@ public class AutoCrystal extends CrystalModule {
       .add(
          ((meteordevelopment.meteorclient.settings.BoolSetting.Builder)((meteordevelopment.meteorclient.settings.BoolSetting.Builder)((meteordevelopment.meteorclient.settings.BoolSetting.Builder)((meteordevelopment.meteorclient.settings.BoolSetting.Builder)new meteordevelopment.meteorclient.settings.BoolSetting.Builder()
                         .name("also-limit-breaking"))
-                     .description("Apply the same restriction to breaking, not just placing."))
+                     .description(
+                        "Apply the same restriction to breaking, not just placing. In Crosshair mode, on: a crystal is only hit while your crosshair is on it, along the look the server has (the aura asks for your camera's look back if another rotation still holds it). Off: with rotate or Stealth force-rotate on, the aura may also turn the server-side look to hit any crystal within hit reach and the view angle that the current look misses; placing still only goes where you point."
+                     ))
                   .defaultValue(false))
                .visible(() -> this.aimMode.get() != AutoCrystal.AimMode.Off))
             .build()
@@ -441,7 +460,9 @@ public class AutoCrystal extends CrystalModule {
       .add(
          ((meteordevelopment.meteorclient.settings.BoolSetting.Builder)((meteordevelopment.meteorclient.settings.BoolSetting.Builder)((meteordevelopment.meteorclient.settings.BoolSetting.Builder)new meteordevelopment.meteorclient.settings.BoolSetting.Builder()
                      .name("require-higher-target"))
-                  .description("Only act while the target is above you. Idles otherwise, the module stays on."))
+                  .description(
+                     "Only place while the target is above you, going by the position the server last sent for them. Crystals already standing are still broken; otherwise the aura idles and the module stays on."
+                  ))
                .defaultValue(false))
             .build()
       );
@@ -552,6 +573,7 @@ public class AutoCrystal extends CrystalModule {
    private List<class_2338> scanBases;
    private final Map<class_2338, Optional<AutoCrystal.Aim>> placeAimCache = new HashMap<>();
    private final Map<Integer, Optional<AutoCrystal.Aim>> hitAimCache = new HashMap<>();
+   private final Map<class_2338, Boolean> hittableCache = new HashMap<>();
    private final Map<class_243, Float> selfDamageCache = new HashMap<>();
    private final Map<Integer, AutoCrystal.TargetFigures> figuresByTarget = new HashMap<>();
    private AutoCrystal.TargetFigures figures = new AutoCrystal.TargetFigures();
@@ -565,6 +587,16 @@ public class AutoCrystal extends CrystalModule {
    private final Set<Integer> hitCrystals = new HashSet<>();
    private final AutoCrystal.InFlight<Integer> attacked = new AutoCrystal.InFlight<>();
    private final AutoCrystal.InFlight<class_2338> placed = new AutoCrystal.InFlight<>();
+   // Base -> {tick of the first click on it, clicks on it since}, kept longer than `placed`: a crystal whose spawn
+   // arrives after the short in-flight window is still recognised as ours (no reaction wait, no min-break-damage)
+   // instead of a stranger's.
+   private final Map<class_2338, int[]> recentPlaces = new HashMap<>();
+   // Ticks from a click to its crystal showing up, as last measured; slowly forgotten. The tab-list ping is updated
+   // rarely, smoothed, and 0 without a tab entry, so on its own it can make the in-flight windows too short.
+   private double spawnLag;
+   private boolean sendingOwnHit;
+   private boolean mining;
+   private boolean scoredReady;
    private final ReactionClock reactions = new ReactionClock();
    private final AutoCrystal.OwnCrystals<class_2338> ownCrystals = new AutoCrystal.OwnCrystals<>();
    private final AutoCrystal.CrystalsSeen<class_2338> crystalsSeen = new AutoCrystal.CrystalsSeen<>();
@@ -626,6 +658,10 @@ public class AutoCrystal extends CrystalModule {
       this.hitCrystals.clear();
       this.attacked.clear();
       this.placed.clear();
+      this.recentPlaces.clear();
+      this.spawnLag = 0.0;
+      this.hittableCache.clear();
+      this.mining = false;
    }
 
    @EventHandler(
@@ -697,14 +733,23 @@ public class AutoCrystal extends CrystalModule {
          this.reactions.tick();
          this.settleWorth();
          this.noteWeakness();
-         int window = CrystalUtils.confirmTicks(EntityUtils.getPing(this.mc.field_1724));
+         int tabWindow = CrystalUtils.confirmTicks(EntityUtils.getPing(this.mc.field_1724));
+         // A measured lag is forgotten at one tick per second, so one spike does not keep every window long.
+         this.spawnLag = Math.max(0.0, this.spawnLag - 0.05);
+         int window = Math.min(20, Math.max(tabWindow, (int)Math.ceil(this.spawnLag) + 1));
+         // Long enough for a late spawn to still count as ours, short enough that a click the server refused does not
+         // claim an opponent's crystal on that base much later.
+         int adoptFor = Math.min(20, Math.max(10, 2 * window + 2));
+         this.recentPlaces.values().removeIf(clicks -> this.clientTicks - clicks[0] > adoptFor);
          Set<Integer> brokenByUs = this.attacked.expire(this.clientTicks, window, id -> {
             class_1297 crystal = this.mc.field_1687.method_8469(id);
             return crystal == null || crystal.method_31481();
          });
-         this.trackOwnWork(brokenByUs);
+         this.trackOwnWork(brokenByUs, tabWindow);
          this.placed.expire(this.clientTicks, window, base -> CrystalUtils.isObstructed(base.method_10084(), this.goneWhenSent));
          if (!Stealth.paused() && !this.mc.field_1724.method_29504()) {
+            this.dropStaleMining();
+            this.mining = this.mc.field_1761.method_2923();
             this.placeBudget.update((Double)this.placeSpeed.get(), ClickGate.perTick((Double)this.placeSpeed.get()));
             this.breakBudget.update((Double)this.breakSpeed.get(), ClickGate.perTick((Double)this.breakSpeed.get()));
             ClickGate.allowBurst(ClickGate.perTick(Math.max((Double)this.placeSpeed.get(), (Double)this.breakSpeed.get())));
@@ -729,6 +774,7 @@ public class AutoCrystal extends CrystalModule {
             this.scanBases = null;
             this.placeAimCache.clear();
             this.hitAimCache.clear();
+            this.hittableCache.clear();
             this.candidates = List.of();
             this.recordTrackedPositions();
             this.ownHits.values().removeIf(hit -> this.clientTicks - hit.tick() > 50);
@@ -759,7 +805,9 @@ public class AutoCrystal extends CrystalModule {
                   class_1657 primary = inHeight.isEmpty() ? null : inHeight.get(0);
                   AutoCrystal.BreakOutcome breakOutcome = AutoCrystal.BreakOutcome.NOTHING;
                   if ((Boolean)this.doBreak.get()) {
-                     for (class_1657 candidatex : inHeight) {
+                     // The height filter only holds back new crystals. One already standing is broken whatever the
+                     // target's height, or it stays until the next knock-up and blocks every base around it.
+                     for (class_1657 candidatex : this.candidates) {
                         this.aimAt(candidatex);
                         breakOutcome = this.tryBreak();
                         if (breakOutcome != AutoCrystal.BreakOutcome.NOTHING && breakOutcome != AutoCrystal.BreakOutcome.HELD) {
@@ -769,21 +817,28 @@ public class AutoCrystal extends CrystalModule {
                   }
 
                   if ((Boolean)this.place.get() && breakOutcome != AutoCrystal.BreakOutcome.TURNING && breakOutcome != AutoCrystal.BreakOutcome.SWAPPED) {
-                     for (class_1657 candidatexx : inHeight) {
-                        this.aimAt(candidatexx);
-                        if (this.tryPlace() || this.placeSkip != null || this.turnBusy) {
-                           break;
+                     if (this.mining) {
+                        // Vanilla sends no right click while a block is being mined; hits still go out.
+                        this.placeSkip = "mining a block - no right click goes out until it stops";
+                     } else {
+                        for (class_1657 candidatexx : inHeight) {
+                           this.aimAt(candidatexx);
+                           if (this.tryPlace() || this.placeSkip != null || this.turnBusy) {
+                              break;
+                           }
                         }
                      }
                   }
 
-                  if (primary == null) {
+                  if (primary == null && !this.workAvailable) {
                      this.aimAt(this.candidates.get(0));
                      this.turn.reset(TURN_OWNER);
                      this.handBack(false);
                      String name = this.target.method_5477().getString();
                      this.logState("height", () -> name + " is outside the height filter");
                   } else {
+                     // Here primary is only null when a crystal is being broken for a target outside the height
+                     // filter; the target stays the one that break was judged for.
                      if (!this.workAvailable) {
                         this.aimAt(primary);
                      }
@@ -794,7 +849,8 @@ public class AutoCrystal extends CrystalModule {
 
                      if (this.workAvailable) {
                         this.reactions.forget(AutoCrystal.Noticed.QUIET);
-                        if (!this.turnHeldForYou && !this.turnBusy) {
+                        // Not while you mine: a different stack in hand restarts the block (see handBack).
+                        if (!this.turnHeldForYou && !this.turnBusy && !this.mining) {
                            this.keepCrystalsOut();
                         }
                      } else {
@@ -824,7 +880,7 @@ public class AutoCrystal extends CrystalModule {
                         this.logState("no-spot", () -> name + ": place is off and nothing to break");
                      }
 
-                     if ((Boolean)this.debug.get() && (Boolean)this.place.get() && this.renderPos == null) {
+                     if ((Boolean)this.debug.get() && (Boolean)this.place.get() && this.renderPos == null && primary != null) {
                         this.logWhyNoPlacement();
                      }
                   }
@@ -847,11 +903,57 @@ public class AutoCrystal extends CrystalModule {
          return "a key-driven module is at work";
       } else if (this.mc.field_1724.method_5765()) {
          return "riding";
-      } else if (this.mc.field_1724.method_6115()) {
-         return "using an item";
       } else {
-         return this.mc.field_1761.method_2923() ? "mining" : null;
+         // Mining is no full pause: vanilla's attack press has no mining check, only the use click waits for it
+         // (see the place loop in tick()).
+         return this.mc.field_1724.method_6115() ? "using an item" : null;
       }
+   }
+
+   // A left click on a block starts mining it, and vanilla only lets go of it later in this tick, when handleInputEvents
+   // finds the button up. Until then the client counts as mining and no right click may go out, so the aura would lose
+   // this tick to a click that has already ended. This is vanilla's own abort, only done before the aura acts; the
+   // conditions are the ones under which handleBlockBreaking(false) gets to it.
+   private void dropStaleMining() {
+      if (this.mc.field_1761.method_2923()
+         && !this.mc.field_1690.field_1886.method_1434()
+         && this.mc.method_18506() == null
+         && !this.mc.field_1724.method_6115()
+         && !stabs(this.mc.field_1724.method_6047())) {
+         this.mc.field_1761.method_2925();
+      }
+   }
+
+   // no-mining-bases, read by OwnClickMixin before vanilla starts or continues mining the block under the crosshair:
+   // a weapon or crystals in hand cannot usefully mine obsidian or bedrock, so the left click only swings.
+   public static boolean sparesBase(class_310 mc) {
+      AutoCrystal module = Modules.get() == null ? null : (AutoCrystal)Modules.get().get(AutoCrystal.class);
+      if (module == null || !module.isActive() || !(Boolean)module.noMiningBases.get()) {
+         return false;
+      } else if (minesFromClick()) {
+         // These start from the attack press itself (Meteor posts it from the start of attackBlock): left out, Auto
+         // Tool never picks the pickaxe and Packet Mine never queues the block, and a surround could not be mined.
+         return false;
+      } else if (mc.field_1724 == null || mc.field_1687 == null || mc.field_1724.method_68878()) {
+         return false;
+      } else if (mc.field_1765 instanceof class_3965 hit && hit.method_17783() == class_240.field_1332 && CrystalUtils.isBase(hit.method_17777())) {
+         class_1799 hand = mc.field_1724.method_6047();
+         return hand.method_31573(class_3489.field_42611)
+            || hand.method_31573(class_3489.field_42612)
+            || hand.method_31574(class_1802.field_49814)
+            || hand.method_31574(class_1802.field_8547)
+            || hand.method_31574(class_1802.field_8301);
+      } else {
+         return false;
+      }
+   }
+
+   private static boolean minesFromClick() {
+      Modules modules = Modules.get();
+      return modules.isActive(AutoTool.class)
+         || modules.isActive(PacketMine.class)
+         || modules.isActive(InstantRebreak.class)
+         || modules.isActive(VeinMiner.class);
    }
 
    private int ownStep() {
@@ -859,25 +961,45 @@ public class AutoCrystal extends CrystalModule {
       return Math.max(ticks, Stealth.pace(ticks));
    }
 
-   private void trackOwnWork(Set<Integer> brokenByUs) {
+   private void trackOwnWork(Set<Integer> brokenByUs, int tabWindow) {
       for (class_2338 base : this.placed.keys()) {
          this.reactions.saw(base);
+      }
+
+      // Bases still in flight, and those clicked a little longer ago: a spawn that arrives after the in-flight window
+      // is still our crystal, not a stranger's to react to.
+      Set<class_2338> clicked = new HashSet<>(this.recentPlaces.keySet());
+      clicked.addAll(this.placed.keys());
+
+      for (class_2338 base : clicked) {
          class_2338 at = base.method_10084();
 
-         for (class_1511 crystal : this.mc.field_1687.method_8390(class_1511.class, new class_238(at), c -> !c.method_31481() && c.method_24515().equals(at))) {
+         // A crystal already hit is the old one still drawn after a replace click, not the one that click put there:
+         // adopting it would use up the base's entry before our real crystal shows up.
+         Predicate<class_1511> fresh = c -> !c.method_31481() && c.method_24515().equals(at) && !this.attacked.contains(c.method_5628());
+
+         for (class_1511 crystal : this.mc.field_1687.method_8390(class_1511.class, new class_238(at), fresh)) {
             // Hittable the tick it shows up. You placed it to hit it; a player spamming the attack button lands the
             // first tick it exists, which is what a d-tap needs - the old two-to-three tick wait let the window close.
             if (this.ownCrystals.appeared(crystal.method_5628(), base, this.clientTicks)) {
                this.worth.placedForIt(crystal.method_5628());
+               int[] clicks = this.recentPlaces.remove(base);
+               if (clicks != null && clicks[1] == 1) {
+                  // Only a base clicked once says how long a spawn takes: after a click the server refused, the one it
+                  // took came later and the first would make the lag look longer. A sample still never exceeds about
+                  // twice what the tab ping says, so one server hiccup does not hold every window long.
+                  this.spawnLag = Math.max(this.spawnLag, Math.min(this.clientTicks - clicks[0], 2 * tabWindow + 2));
+               }
             }
          }
       }
 
       Set<class_2338> standing = new HashSet<>();
+      Set<Integer> ownGone = new HashSet<>();
       this.ownCrystals.sweep(id -> {
          class_1297 crystalx = this.mc.field_1687.method_8469(id);
          return crystalx == null || crystalx.method_31481();
-      }, standing::add);
+      }, standing::add, ownGone::add);
       this.hitBases.values().removeIf(until -> this.clientTicks >= until);
       Map<Integer, class_2338> crystals = new HashMap<>();
 
@@ -887,7 +1009,10 @@ public class AutoCrystal extends CrystalModule {
          }
       }
 
-      this.crystalsSeen.update(crystals, brokenByUs::contains, base -> this.forgetAround(base, standing));
+      // A crystal of ours that went - broken by someone else first, caught in a chain explosion, or its removal seen
+      // only after the hit's window - changes nothing around its base that you did not expect: it stood there because
+      // you put it there. Only a stranger's crystal vanishing resets the reaction time around it.
+      this.crystalsSeen.update(crystals, id -> brokenByUs.contains(id) || ownGone.contains(id), base -> this.forgetAround(base, standing));
 
       for (class_2338 base : standing) {
          this.reactions.saw(base);
@@ -912,8 +1037,12 @@ public class AutoCrystal extends CrystalModule {
    }
 
    private AutoCrystal.CrystalWait crystalWait(class_1511 crystal) {
-      boolean answered = this.worth.worth(crystal.method_5628(), id -> this.reactions.ready(new AutoCrystal.CrystalWorth(id)));
-      return AutoCrystal.CrystalWait.of(answered, this.ownCrystals.hittableFrom(crystal.method_5628()), this.clientTicks);
+      // A crystal of ours is never a surprise to react to, for as long as it stands - also after ticks in which it was
+      // not looked at (a key-driven module at work, out of reach or view for a moment, the target outside the height
+      // filter). WorthMemory alone forgot it after one such tick and made it wait a full reaction time.
+      Integer ownFrom = this.ownCrystals.hittableFrom(crystal.method_5628());
+      boolean answered = ownFrom != null || this.worth.worth(crystal.method_5628(), id -> this.reactions.ready(new AutoCrystal.CrystalWorth(id)));
+      return AutoCrystal.CrystalWait.of(answered, ownFrom, this.clientTicks);
    }
 
    private void settleWorth() {
@@ -943,13 +1072,53 @@ public class AutoCrystal extends CrystalModule {
          }
       }
 
+      if (!this.sendingOwnHit
+         && event.packet instanceof class_2824 crystalHit
+         && this.mc.field_1724 != null
+         && this.mc.field_1687 != null
+         && "ATTACK".equals(String.valueOf(((IPlayerInteractEntityC2SPacket)crystalHit).meteor$getType()))
+         && ((IPlayerInteractEntityC2SPacket)crystalHit).meteor$getEntity() instanceof class_1511 struck
+         && !struck.method_31481()
+         && this.breaksCrystal(this.mc.field_1724.method_6047())) {
+         // A crystal you broke by hand, or another module did (Double Tap), hurts the players around it like one of
+         // ours. Unrecorded, smart-delay took that for a hit from elsewhere and waited the whole window out, and the
+         // crystal vanishing reset the reaction time on every base around it. The aura's own hits are recorded in
+         // attack(), against the predicted target.
+         if (!this.attacked.contains(struck.method_5628())) {
+            this.attacked.sent(struck.method_5628(), this.clientTicks);
+            // In `attacked` the crystal no longer counts as in the way of a new one (goneWhenPlanned), so its base gets
+            // the same replace-delay hold as after a hit of the aura's own.
+            this.hitBases.merge(struck.method_24515().method_10074(), this.clientTicks + this.ownStep(), Math::max);
+         }
+
+         class_243 at = struck.method_73189();
+
+         // All players in the world, not the candidates: those are empty while a key-driven module pauses the aura.
+         for (class_1657 player : this.mc.field_1687.method_18456()) {
+            if (player != this.mc.field_1724 && !player.method_31481()) {
+               float raw = BlastShield.crystalRawDamage(player, at);
+               if (raw > 0.0F) {
+                  this.recordOwnHit(player.method_5628(), raw);
+               }
+            }
+         }
+      }
+
       if (event.packet instanceof class_2885 click && this.mc.field_1724 != null && this.mc.field_1687 != null) {
          class_1799 stack = this.mc.field_1724.method_5998(click.method_12546());
          class_2338 base = click.method_12543().method_17777().method_10062();
-         if (stack.method_31574(class_1802.field_8301) && CrystalUtils.isBase(base) && !this.placed.contains(base)) {
-            // A crystal you put down yourself (right-click, a macro) is as much yours as one this aura placed: break it
-            // the moment it appears instead of waiting out the reaction time for a stranger's crystal.
-            this.placed.sent(base, this.clientTicks);
+         if (stack.method_31574(class_1802.field_8301) && CrystalUtils.isBase(base)) {
+            // Every crystal click goes through here, the aura's own included. One on a spot something visibly stands
+            // in is refused by the server and tells nothing about how long a spawn takes.
+            if (!CrystalUtils.isObstructed(base.method_10084(), this.goneWhenSent)) {
+               this.recentPlaces.computeIfAbsent(base, b -> new int[]{this.clientTicks, 0})[1]++;
+            }
+
+            if (!this.placed.contains(base)) {
+               // A crystal you put down yourself (right-click, a macro) is as much yours as one this aura placed: break
+               // it the moment it appears instead of waiting out the reaction time for a stranger's crystal.
+               this.placed.sent(base, this.clientTicks);
+            }
          }
 
          if (stack.method_7960() || stack.method_31574(class_1802.field_8281)) {
@@ -1058,7 +1227,8 @@ public class AutoCrystal extends CrystalModule {
                rules
             );
          } else {
-            AutoCrystal.Gate gate = this.rejection(looking, legacy, required, selfHealth);
+            // Judged with the floor the crosshair fast path uses, or the report calls a base too weak that does get a crystal.
+            AutoCrystal.Gate gate = this.rejection(looking, legacy, this.crosshairFloor(looking, required), selfHealth);
             return String.format("Crosshair: Basis %s %s | Regeln %s", looking.method_23854(), gate == null ? "brauchbar" : "verworfen: " + gate.label, rules);
          }
       } else {
@@ -1123,7 +1293,11 @@ public class AutoCrystal extends CrystalModule {
    }
 
    private void handBack(boolean fightOver) {
-      if (this.loan.active() && this.mc.field_1724 != null) {
+      if (this.mining) {
+         // Another item in hand would restart the block you are mining; the slot goes back once you stop. Mining used
+         // to pause the whole aura, which had the same effect.
+         this.reactions.forget(AutoCrystal.Noticed.QUIET);
+      } else if (this.loan.active() && this.mc.field_1724 != null) {
          AutoCrystal.SwitchMode mode = (AutoCrystal.SwitchMode)this.switchMode.get();
          if (mode == AutoCrystal.SwitchMode.None) {
             this.loan.clear();
@@ -1212,11 +1386,24 @@ public class AutoCrystal extends CrystalModule {
 
    private boolean heightOk() {
       if ((Boolean)this.heightFilter.get() && this.target != null) {
-         double difference = this.target.method_23318() - this.mc.field_1724.method_23318();
+         double difference = this.heightDifference();
          return difference < this.minHeight.get() ? false : (Double)this.maxHeight.get() <= 0.0 || difference <= (Double)this.maxHeight.get();
       } else {
          return true;
       }
+   }
+
+   // Measured on the target's last server position, as predictedBox does: the drawn one is interpolated a few ticks
+   // behind it, which opened every knock-up's window late and closed it late.
+   private double heightDifference() {
+      return serverPos(this.target).field_1351 - this.mc.field_1724.method_23318();
+   }
+
+   // Where the server last put this player. Only spawn and move packets write that position, so a player the client
+   // made up itself - Meteor's fake player - still has the world origin there; its own position is all it has.
+   private static class_243 serverPos(class_1657 player) {
+      class_243 server = player.method_43389().method_60933();
+      return !(player instanceof FakePlayerEntity) && server.method_1027() > 0.0 ? server : player.method_73189();
    }
 
    private boolean facePlacing() {
@@ -1262,8 +1449,31 @@ public class AutoCrystal extends CrystalModule {
       return Math.min((Double)this.breakRange.get(), VanillaLimits.entityRange());
    }
 
+   // Whether placing turns the server-side look first.
    private boolean shouldRotate() {
-      return ((Boolean)this.rotate.get() || Stealth.legitPlace()) && this.aimMode.get() != AutoCrystal.AimMode.Crosshair;
+      return this.shouldRotate(false);
+   }
+
+   // Crosshair mode never turns to place - the crystal goes where you point - but with also-limit-breaking off it may
+   // turn to hit a crystal its look no longer lands on, as the setting says.
+   private boolean shouldRotate(boolean breaking) {
+      return ((Boolean)this.rotate.get() || Stealth.legitPlace())
+         && (this.aimMode.get() != AutoCrystal.AimMode.Crosshair || breaking && !(Boolean)this.aimAppliesToBreak.get());
+   }
+
+   private boolean crosshair() {
+      return this.aimMode.get() == AutoCrystal.AimMode.Crosshair;
+   }
+
+   // Whether a click along this aim needs a turn first. In Crosshair mode, and while you mine, a hit along the look the
+   // server already has goes out as it is: sending that look again through TurnProgress would only renew Meteor's hold
+   // on a look the camera may already have left, and while mining such a look makes vanilla drop the block.
+   private boolean turnsFor(AutoCrystal.Aim aim, boolean breaking) {
+      return this.shouldRotate(breaking) && !((this.crosshair() || this.mining) && onServerLook(aim.yaw(), aim.pitch()));
+   }
+
+   private static boolean onServerLook(double yaw, double pitch) {
+      return Math.abs(class_3532.method_15338(yaw - LegitPlace.currentYaw())) < 0.001 && Math.abs(pitch - LegitPlace.currentPitch()) < 0.001;
    }
 
    private AutoCrystal.Aim hitAim(class_238 box) {
@@ -1271,20 +1481,64 @@ public class AutoCrystal extends CrystalModule {
       class_243 eyes = this.mc.field_1724.method_33571();
       if (box.method_49271(eyes) >= reach * reach) {
          return null;
-      } else if (this.shouldRotate()) {
+      } else {
+         if (this.crosshair()) {
+            // Along the look the server already has first: a hit there needs no turn.
+            if (LegitPlace.confirmEntity(box, LegitPlace.currentYaw(), LegitPlace.currentPitch(), reach) != null) {
+               return this.currentAim();
+            }
+
+            // While you mine no turn goes out at all: OwnClickMixin holds the mining back while the server is sent a
+            // look other than the camera's, and vanilla then aborts the block and starts it over.
+            if (this.mining || !this.shouldRotate(true)) {
+               return null;
+            }
+
+            // Where your crosshair is on the crystal, the camera's look is the turn to make: it is the look the server
+            // goes back to anyway, and a turn that lands on it does not leave the next crosshair placement behind.
+            AutoCrystal.Aim camera = this.cameraAim();
+            if (LegitPlace.confirmEntity(box, camera.yaw(), camera.pitch(), reach) != null) {
+               return camera;
+            }
+         } else if (this.mining || !this.shouldRotate(true)) {
+            return LegitPlace.confirmEntity(box, LegitPlace.currentYaw(), LegitPlace.currentPitch(), reach) == null ? null : this.currentAim();
+         }
+
          if (box.method_1006(eyes)) {
             return this.currentAim();
          } else {
             LegitPlace.EntityResult result = LegitPlace.forEntity(box, reach);
             return result == null ? null : new AutoCrystal.Aim(result.yaw(), result.pitch());
          }
-      } else {
-         return LegitPlace.confirmEntity(box, LegitPlace.currentYaw(), LegitPlace.currentPitch(), reach) == null ? null : this.currentAim();
       }
    }
 
    private AutoCrystal.Aim currentAim() {
       return new AutoCrystal.Aim(LegitPlace.currentYaw(), LegitPlace.currentPitch());
+   }
+
+   private AutoCrystal.Aim cameraAim() {
+      return new AutoCrystal.Aim(this.mc.field_1724.method_36454(), this.mc.field_1724.method_36455());
+   }
+
+   // Crosshair mode clicks only along the look the server has. While that look is held somewhere else - after a turned
+   // hit or another module's turn - something your crosshair is on cannot be clicked, and the aura sat blind until
+   // Meteor's rotation hold ran out. Ask for the camera's look back instead, as Sword Place does; the click itself still
+   // waits until the server has that look. Never while a key-driven module or another module's turn is at work: the
+   // request refuses every look but the camera's for two ticks.
+   private boolean requestCameraLook() {
+      if (!this.crosshair() || KeyPriority.active() || this.turn.heldByOther(TURN_OWNER)) {
+         return false;
+      } else if (!this.turn.ownClickMismatched()) {
+         // Only a look TurnProgress queued or is still easing back can be brought home by asking. The server already
+         // looks along the camera, or a rotation outside TurnProgress holds it: asking changes nothing there, and
+         // would only keep refusing every other module's turn for as long as the crosshair rests here.
+         return false;
+      } else {
+         TurnProgress.requestCamera();
+         this.workAvailable = true;
+         return true;
+      }
    }
 
    private AutoCrystal.BreakOutcome tryBreak() {
@@ -1316,6 +1570,7 @@ public class AutoCrystal extends CrystalModule {
          float bestDamage = 0.0F;
          boolean waiting = false;
          boolean reactionWait = false;
+         boolean cameraWanted = false;
 
          for (class_1297 entity : this.mc.field_1687.method_18112()) {
             if (entity instanceof class_1511 crystal
@@ -1342,8 +1597,12 @@ public class AutoCrystal extends CrystalModule {
                         && !(CrystalScore.upperBound(damage, need) <= bestScore)
                         && Stealth.allowsEntity(crystal)) {
                         AutoCrystal.Aim aim = this.crystalAim(crystal);
-                        if (aim != null
-                           && (!limitAim || (this.aimMode.get() == AutoCrystal.AimMode.Crosshair ? this.looksAtCrystal(crystal) : this.aimAllows(pos)))) {
+                        boolean allowed = aim != null
+                           && (!limitAim || (this.aimMode.get() == AutoCrystal.AimMode.Crosshair ? this.looksAtCrystal(crystal) : this.aimAllows(pos)));
+                        // Your crosshair is on it, but the look the server holds is not (see requestCameraLook). It goes
+                        // through the same checks as a hit, so the camera is only asked for a crystal that would be hit.
+                        boolean cameraOnly = aim == null && this.crosshair() && this.looksAtCrystal(crystal);
+                        if (allowed || cameraOnly) {
                            float counted = damage;
                            if (floor > 0.0F) {
                               float raw = predicted == null
@@ -1357,12 +1616,16 @@ public class AutoCrystal extends CrystalModule {
                            if (worth && !(CrystalScore.upperBound(counted, need) <= bestScore)) {
                               float selfDamage = this.selfDamage(pos);
                               if (this.selfDamageOk(selfDamage, (Double)this.maxBreakSelfDamage.get(), selfHealth, false)) {
-                                 double score = CrystalScore.score(counted, selfDamage, (Double)this.selfDamageWeight.get(), need);
-                                 if (!(score <= bestScore)) {
-                                    bestScore = score;
-                                    bestDamage = counted;
-                                    best = crystal;
-                                    bestAim = aim;
+                                 if (cameraOnly) {
+                                    cameraWanted = true;
+                                 } else {
+                                    double score = CrystalScore.score(counted, selfDamage, (Double)this.selfDamageWeight.get(), need);
+                                    if (!(score <= bestScore)) {
+                                       bestScore = score;
+                                       bestDamage = counted;
+                                       best = crystal;
+                                       bestAim = aim;
+                                    }
                                  }
                               }
                            }
@@ -1381,6 +1644,12 @@ public class AutoCrystal extends CrystalModule {
                }
             }
 
+            // Not while smart-delay waits a hit from elsewhere out or nothing in the hotbar breaks a crystal: no hit
+            // would follow, and the request keeps every other module's turn back.
+            if (cameraWanted && !waitOutWindow && this.crystalHitSlot() >= 0) {
+               this.requestCameraLook();
+            }
+
             return AutoCrystal.BreakOutcome.NOTHING;
          } else {
             int hitSlot = this.crystalHitSlot();
@@ -1396,7 +1665,10 @@ public class AutoCrystal extends CrystalModule {
                } else {
                   int selected = this.mc.field_1724.method_31548().method_67532();
                   if (hitSlot != selected) {
-                     if (this.weaknessUnnoticed()) {
+                     if (this.mining) {
+                        // Another item in hand would restart the block you are mining; the hit waits until you stop.
+                        return AutoCrystal.BreakOutcome.HELD;
+                     } else if (this.weaknessUnnoticed()) {
                         this.reacting.waitingFor(this.target);
                         return AutoCrystal.BreakOutcome.HELD;
                      } else if (this.turn.heldByOther(TURN_OWNER)) {
@@ -1412,7 +1684,11 @@ public class AutoCrystal extends CrystalModule {
                         this.reacting.engaged();
                         return AutoCrystal.BreakOutcome.SWAPPED;
                      }
-                  } else if (!this.readyToAct(bestAim)) {
+                  } else if (this.mining && this.turnsFor(bestAim, true)) {
+                     // A turn would make vanilla drop the block you are mining (hitAim already keeps to the look the
+                     // server has while you mine; this only makes sure).
+                     return AutoCrystal.BreakOutcome.HELD;
+                  } else if (!this.readyToAct(bestAim, true)) {
                      return AutoCrystal.BreakOutcome.TURNING;
                   } else if (!this.breakBudget.canAfford()) {
                      this.weaponWaits = true;
@@ -1596,7 +1872,7 @@ public class AutoCrystal extends CrystalModule {
       if (placing ? !this.figures.placeBoxDone : !this.figures.breakBoxDone) {
          class_238 box = null;
          if ((Boolean)this.predictMovement.get() && this.target != null) {
-            class_243 server = this.target.method_43389().method_60933();
+            class_243 server = serverPos(this.target);
             class_238 start = this.target.method_5829().method_997(server.method_1020(this.target.method_73189()));
             double ping = EntityUtils.getPing(this.mc.field_1724) / 50.0;
             int ticks = (int)Math.min((double)((Integer)this.maxPredictTicks.get()).intValue(), Math.ceil(placing ? 2.0 * ping + 2.0 : ping));
@@ -1630,7 +1906,7 @@ public class AutoCrystal extends CrystalModule {
       for (class_1657 player : this.mc.field_1687.method_18456()) {
          if (player != this.mc.field_1724 && !player.method_31481() && !(this.mc.field_1724.method_5858(player) > range * range)) {
             ArrayDeque<class_243> history = this.trackedHistory.computeIfAbsent(player.method_5628(), id -> new ArrayDeque<>());
-            history.addLast(player.method_43389().method_60933());
+            history.addLast(serverPos(player));
 
             while (history.size() > 3) {
                history.removeFirst();
@@ -1666,9 +1942,9 @@ public class AutoCrystal extends CrystalModule {
       }
    }
 
-   private boolean readyToAct(AutoCrystal.Aim aim) {
+   private boolean readyToAct(AutoCrystal.Aim aim, boolean breaking) {
       this.reacting.engaged();
-      if (!this.shouldRotate()) {
+      if (!this.turnsFor(aim, breaking)) {
          return true;
       } else if (this.turn.wouldReach(TURN_OWNER, aim.yaw(), aim.pitch())) {
          return true;
@@ -1688,7 +1964,8 @@ public class AutoCrystal extends CrystalModule {
       if (!budget.canAfford(cost)) {
          return false;
       } else {
-         return (use ? Stealth.claimUse() : Stealth.claimAttack()) ? budget.tryConsume(cost) : false;
+         // A hit may go out while you mine, as vanilla's attack press may; a right click may not.
+         return (use ? Stealth.claimUse() : Stealth.claimAttack(true)) ? budget.tryConsume(cost) : false;
       }
    }
 
@@ -1727,7 +2004,7 @@ public class AutoCrystal extends CrystalModule {
                }
             } else {
                this.workAvailable = true;
-               if (!this.readyToAct(spot.aim())) {
+               if (!this.readyToAct(spot.aim(), false)) {
                   return true;
                } else if (!this.placeBudget.canAfford()) {
                   return true;
@@ -1744,6 +2021,16 @@ public class AutoCrystal extends CrystalModule {
    private AutoCrystal.Aim placeAim(class_2338 base) {
       double reach = this.placeReach();
       if (this.shouldRotate()) {
+         // While a click of your own is about to go out, Sword Place has asked for the camera, or you glide, only the
+         // camera's look may be sent. Where that look already lands on the base take it: a face point picked by
+         // turning cost is never exactly the camera's, and would be refused for this tick.
+         if (TurnProgress.cameraNeeded()) {
+            AutoCrystal.Aim camera = this.cameraAim();
+            if (LegitPlace.confirmCrystal(base, camera.yaw(), camera.pitch(), reach) != null) {
+               return camera;
+            }
+         }
+
          LegitPlace.Result result = LegitPlace.forCrystal(base, reach);
          return result == null ? null : new AutoCrystal.Aim(result.yaw(), result.pitch());
       } else {
@@ -1764,9 +2051,17 @@ public class AutoCrystal extends CrystalModule {
       }
    }
 
-   // Whether the crystal on this base could be hit from where you stand right now.
+   // Whether the crystal on this base could be hit from where you stand right now: by some look within hit reach, not
+   // necessarily the current one, in every aim mode. Crosshair mode used to ask for the current look here, which the
+   // side face of fresh obsidian never passes - the crystal's box is above that face - so it refused to place until you
+   // aimed at the top. The hit itself still goes only along a look the server has (hitAim).
    private boolean hittableAt(class_2338 base) {
-      return !(Boolean)this.doBreak.get() || this.hitAim(CrystalUtils.crystalHitbox(base)) != null;
+      return !(Boolean)this.doBreak.get() || this.hittableCache.computeIfAbsent(base, b -> {
+         class_238 box = CrystalUtils.crystalHitbox(b);
+         double reach = this.breakReach();
+         class_243 eyes = this.mc.field_1724.method_33571();
+         return box.method_49271(eyes) < reach * reach && (box.method_1006(eyes) || LegitPlace.forEntity(box, reach) != null);
+      });
    }
 
    // far-place: a crystal goes down beyond hit reach only while none of the ones already standing is waiting there to
@@ -1794,8 +2089,34 @@ public class AutoCrystal extends CrystalModule {
 
    private AutoCrystal.Spot findPlacement(boolean legacy, double required, double selfHealth) {
       if (this.aimMode.get() == AutoCrystal.AimMode.Crosshair) {
+         // The same shortcuts as in the other aim modes: the same-tick replace at replace-delay 0 along the hit's look,
+         // and the block under your crosshair (crosshair-priority, or obsidian you just placed) with the lower damage
+         // floor and no reaction wait. Neither turns: both only accept the look the server already has.
+         AutoCrystal.Spot again = this.sameTickReplace(legacy, required, selfHealth);
+         // A hit may have turned away from the crosshair (also-limit-breaking off), so the same-tick replace is only
+         // taken on the block you point at: the crystal still goes where you point, never where the hit looked.
+         if (again != null && again.base().equals(this.lookingAt())) {
+            return again;
+         }
+
+         AutoCrystal.Spot yours = this.ownBaseInCrosshair(legacy, required, selfHealth);
+         if (yours != null) {
+            return yours;
+         }
+
          class_2338 looking = this.lookingAt();
-         return looking != null && !this.blockedByPending(looking) ? this.acceptable(looking, legacy, required, selfHealth) : null;
+         if (looking == null || this.blockedByPending(looking)) {
+            return null;
+         } else {
+            AutoCrystal.Spot spot = this.acceptable(looking, legacy, required, selfHealth);
+            if (spot == null && !this.placeWaiting && this.cameraWouldPlace(looking, legacy, required, selfHealth) && this.requestCameraLook()) {
+               if (this.renderPos == null) {
+                  this.renderPos = looking;
+               }
+            }
+
+            return spot;
+         }
       } else {
          AutoCrystal.Spot again = this.sameTickReplace(legacy, required, selfHealth);
          if (again != null) {
@@ -1818,12 +2139,12 @@ public class AutoCrystal extends CrystalModule {
                boolean hittable = this.hittableAt(base);
                if (hittable || farAllowed) {
                   AutoCrystal.SpotPick<AutoCrystal.Spot> into = hittable ? near : far;
-                  double score = this.placementScore(base, legacy, required, selfHealth, into.beat(), true);
+                  double score = this.placementScore(base, legacy, required, selfHealth, into.beat(), true, true);
                   if (!Double.isNaN(score)) {
                      float damage = this.scoredDamage;
                      AutoCrystal.Aim aim = this.cachedReachableAim(base);
                      if (aim != null) {
-                        into.offer(new AutoCrystal.Spot(base, aim), score, damage, this.spotReady(base));
+                        into.offer(new AutoCrystal.Spot(base, aim), score, damage, this.scoredReady);
                      }
                   }
                }
@@ -1858,9 +2179,7 @@ public class AutoCrystal extends CrystalModule {
    // Self-damage limits still apply as usual.
    private AutoCrystal.Spot ownBaseInCrosshair(boolean legacy, double required, double selfHealth) {
       class_2338 looking = this.lookingAt();
-      Integer placedAt = looking == null ? null : this.ownBases.get(looking);
-      boolean own = placedAt != null && this.clientTicks - placedAt <= OWN_BASE_TICKS;
-      if (looking == null || !own && !((Boolean)this.crosshairPriority.get() && CrystalUtils.isBase(looking)) || this.blockedByPending(looking)) {
+      if (looking == null || !this.crosshairFirst(looking) || this.blockedByPending(looking)) {
          return null;
       } else if (new class_238(looking).method_49271(this.mc.field_1724.method_33571()) >= this.placeReach() * this.placeReach()
          || !VanillaLimits.canReachBlock(looking)
@@ -1871,8 +2190,7 @@ public class AutoCrystal extends CrystalModule {
          // you walk up to it. Only far-place asks for that, and then only one at a time.
          return null;
       } else {
-         double floor = Math.min(required, (Double)this.facePlaceMinDamage.get());
-         double score = this.placementScore(looking, legacy, floor, selfHealth, Double.NEGATIVE_INFINITY, true);
+         double score = this.placementScore(looking, legacy, this.crosshairFloor(looking, required), selfHealth, Double.NEGATIVE_INFINITY, true);
          if (Double.isNaN(score)) {
             return null;
          } else {
@@ -1888,6 +2206,33 @@ public class AutoCrystal extends CrystalModule {
                return new AutoCrystal.Spot(looking, aim);
             }
          }
+      }
+   }
+
+   // The block under the crosshair that ownBaseInCrosshair takes first: obsidian you placed in the last two seconds, or
+   // any base while crosshair-priority is on.
+   private boolean crosshairFirst(class_2338 base) {
+      Integer placedAt = this.ownBases.get(base);
+      boolean own = placedAt != null && this.clientTicks - placedAt <= OWN_BASE_TICKS;
+      return own || (Boolean)this.crosshairPriority.get() && CrystalUtils.isBase(base);
+   }
+
+   private double crosshairFloor(class_2338 base, double required) {
+      return this.crosshairFirst(base) ? Math.min(required, (Double)this.facePlaceMinDamage.get()) : required;
+   }
+
+   // Crosshair mode: the base under the crosshair would take a crystal along the camera's look - damage, self-damage,
+   // reach, reaction - and only the look the server still holds misses it (see requestCameraLook).
+   private boolean cameraWouldPlace(class_2338 base, boolean legacy, double required, double selfHealth) {
+      AutoCrystal.Aim camera = this.cameraAim();
+      if (onServerLook(camera.yaw(), camera.pitch()) || LegitPlace.confirmCrystal(base, camera.yaw(), camera.pitch(), this.placeReach()) == null) {
+         return false;
+      } else if (Double.isNaN(this.placementScore(base, legacy, this.crosshairFloor(base, required), selfHealth, Double.NEGATIVE_INFINITY))) {
+         return false;
+      } else if (this.crosshairFirst(base)) {
+         return this.hittableAt(base) || this.farPlacingAllowed();
+      } else {
+         return (this.hittableAt(base) || (Boolean)this.farPlace.get()) && this.spotReady(base);
       }
    }
 
@@ -1908,7 +2253,8 @@ public class AutoCrystal extends CrystalModule {
    }
 
    private AutoCrystal.Aim replaceAim(class_1511 crystal) {
-      if ((Integer)this.replaceDelay.get() != 0 || !(Boolean)this.place.get() || !this.shouldRotate()) {
+      // While you mine nothing is placed, and the hit takes the look the server has (hitAim).
+      if ((Integer)this.replaceDelay.get() != 0 || !(Boolean)this.place.get() || !this.shouldRotate() || this.mining) {
          return null;
       } else {
          class_2338 base = crystal.method_24515().method_10074();
@@ -1995,6 +2341,13 @@ public class AutoCrystal extends CrystalModule {
    }
 
    private double placementScore(class_2338 base, boolean legacy, double required, double selfHealth, double beat, boolean prefiltered) {
+      return this.placementScore(base, legacy, required, selfHealth, beat, prefiltered, false);
+   }
+
+   // clock: the base scan. Every base that clears the damage floor keeps its reaction clock running (into scoredReady),
+   // also while a better one is ahead: a spot in view and worth a crystal is seen, so when the best one gets blocked the
+   // next is ready instead of only then starting its reaction time. The cut-offs below still save the costly part.
+   private double placementScore(class_2338 base, boolean legacy, double required, double selfHealth, double beat, boolean prefiltered, boolean clock) {
       if (!CrystalUtils.canPlace(base, legacy, this.goneWhenPlanned)) {
          return Double.NaN;
       } else {
@@ -2005,6 +2358,10 @@ public class AutoCrystal extends CrystalModule {
             float need = this.seenNeed();
             float most = this.maxTargetDamage(crystal, true);
             if (!(most <= 0.0F) && (!(most < required) || CrystalScore.lethal(most, need))) {
+               if (clock) {
+                  this.scoredReady = this.spotReady(base);
+               }
+
                if (CrystalScore.upperBound(most, need) <= beat) {
                   return Double.NaN;
                } else {
@@ -2076,7 +2433,15 @@ public class AutoCrystal extends CrystalModule {
                   if (this.crystalHitSlot() == this.mc.field_1724.method_31548().method_67532()) {
                      if (this.spend(this.breakBudget, Stealth.actionCost(), false)) {
                         HotbarSwap.syncSelected();
-                        this.mc.field_1724.field_3944.method_52787(class_2824.method_34206(crystal, this.mc.field_1724.method_5715()));
+                        // onClickSent records crystal hits from other sources; this one is recorded below.
+                        this.sendingOwnHit = true;
+
+                        try {
+                           this.mc.field_1724.field_3944.method_52787(class_2824.method_34206(crystal, this.mc.field_1724.method_5715()));
+                        } finally {
+                           this.sendingOwnHit = false;
+                        }
+
                         // The server resets its attack cooldown on this hit; keep the client's in step, like vanilla's
                         // attackEntity, or the next sword hit looks charged here and lands weak there.
                         this.mc.field_1724.method_7350();
@@ -2112,13 +2477,14 @@ public class AutoCrystal extends CrystalModule {
 
                         this.placeAimCache.clear();
                         this.hitAimCache.clear();
+                        this.hittableCache.clear();
                      }
                   }
                }
             }
          }
       };
-      return this.turnAndRun(aim, action);
+      return this.turnAndRun(aim, action, true);
    }
 
    private FindItemResult findCrystals(class_3965 hit) {
@@ -2284,12 +2650,12 @@ public class AutoCrystal extends CrystalModule {
             }
          }
       };
-      this.turnAndRun(aim, action);
+      this.turnAndRun(aim, action, false);
    }
 
-   private boolean turnAndRun(AutoCrystal.Aim aim, Runnable action) {
+   private boolean turnAndRun(AutoCrystal.Aim aim, Runnable action, boolean breaking) {
       Runnable current = this.activeAction(action);
-      if (!this.shouldRotate()) {
+      if (!this.turnsFor(aim, breaking)) {
          current.run();
          return true;
       } else {
@@ -2328,7 +2694,7 @@ public class AutoCrystal extends CrystalModule {
       if (this.target == null || this.mc.field_1724 == null) {
          return this.idleReason;
       } else if (!this.heightOk()) {
-         boolean low = this.target.method_23318() - this.mc.field_1724.method_23318() < (Double)this.minHeight.get();
+         boolean low = this.heightDifference() < (Double)this.minHeight.get();
          return this.target.method_5477().getString() + (low ? " (too low)" : " (too high)");
       } else if (this.turnHeldForYou) {
          return this.target.method_5477().getString() + " (waits for you)";
@@ -2505,9 +2871,10 @@ public class AutoCrystal extends CrystalModule {
          return own == null ? null : own.hittableFrom();
       }
 
-      void sweep(IntPredicate gone, Consumer<B> standing) {
+      void sweep(IntPredicate gone, Consumer<B> standing, IntConsumer removed) {
          this.byId.entrySet().removeIf(entry -> {
             if (gone.test(entry.getKey())) {
+               removed.accept(entry.getKey());
                return true;
             } else {
                standing.accept(entry.getValue().base());
