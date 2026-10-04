@@ -197,7 +197,7 @@ public class AutoCrystal extends CrystalModule {
          ((meteordevelopment.meteorclient.settings.BoolSetting.Builder)((meteordevelopment.meteorclient.settings.BoolSetting.Builder)((meteordevelopment.meteorclient.settings.BoolSetting.Builder)new meteordevelopment.meteorclient.settings.BoolSetting.Builder()
                      .name("rotate"))
                   .description(
-                     "Face the crystal before placing or breaking it. Off, the aura only acts where your own view already reaches: a crystal is placed or hit only when the ray from your eyes along the rotation the server has really lands on it. Aim mode Crosshair never turns to place; it turns only to hit a crystal the server's current look does not land on, and only while also-limit-breaking is off."
+                     "Face the crystal before placing or breaking it. Off, the aura only acts where your own view already reaches: a crystal is placed or hit only when the ray from your eyes along the rotation the server has really lands on it. Aim mode Crosshair never turns away from your crosshair to place - at most it sends your camera's own look back after another turn; it turns only to hit a crystal the server's current look does not land on, and only while also-limit-breaking is off."
                   ))
                .defaultValue(true))
             .build()
@@ -1469,7 +1469,19 @@ public class AutoCrystal extends CrystalModule {
    // server already has goes out as it is: sending that look again through TurnProgress would only renew Meteor's hold
    // on a look the camera may already have left, and while mining such a look makes vanilla drop the block.
    private boolean turnsFor(AutoCrystal.Aim aim, boolean breaking) {
-      return this.shouldRotate(breaking) && !((this.crosshair() || this.mining) && onServerLook(aim.yaw(), aim.pitch()));
+      if (this.crosshair() && !breaking) {
+         // Crosshair placing only ever aims along the server look or the camera's (placeAim): it turns only to bring
+         // the server look back home onto your crosshair, never anywhere else.
+         return !onServerLook(aim.yaw(), aim.pitch());
+      } else {
+         return this.shouldRotate(breaking) && !((this.crosshair() || this.mining) && onServerLook(aim.yaw(), aim.pitch()));
+      }
+   }
+
+   // Crosshair mode may send the camera's own look back to the server to place along it - after a turned hit or
+   // another module's turn left the server look elsewhere - instead of waiting a tick for easeBack to do the same.
+   private boolean mayReturnToCamera() {
+      return ((Boolean)this.rotate.get() || Stealth.legitPlace()) && !this.mining && !KeyPriority.active() && !this.turn.heldByOther(TURN_OWNER);
    }
 
    private static boolean onServerLook(double yaw, double pitch) {
@@ -2033,8 +2045,13 @@ public class AutoCrystal extends CrystalModule {
 
          LegitPlace.Result result = LegitPlace.forCrystal(base, reach);
          return result == null ? null : new AutoCrystal.Aim(result.yaw(), result.pitch());
+      } else if (LegitPlace.confirmCrystal(base, LegitPlace.currentYaw(), LegitPlace.currentPitch(), reach) != null) {
+         return this.currentAim();
+      } else if (this.crosshair() && this.mayReturnToCamera()) {
+         AutoCrystal.Aim camera = this.cameraAim();
+         return LegitPlace.confirmCrystal(base, camera.yaw(), camera.pitch(), reach) == null ? null : camera;
       } else {
-         return LegitPlace.confirmCrystal(base, LegitPlace.currentYaw(), LegitPlace.currentPitch(), reach) == null ? null : this.currentAim();
+         return null;
       }
    }
 

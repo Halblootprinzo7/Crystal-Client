@@ -466,9 +466,8 @@ public class AnchorMacro extends CrystalModule {
    private static final int SHIELD_RETRY_TICKS = 3;
    // A "No shield" line has been reported this cycle; the shield is looked at again on later ticks, the chat only once.
    private boolean shieldReported;
-   // Ticks of your own walking a shield spot is checked against. The shield only has to stand until the blast, a tick
-   // or two after it goes up, and a glowstone one is broken by that blast - so only the cells your body really enters
-   // in that time count, not everything near the line you walk. Three ticks with a full key push on top of the speed
+   // Ticks of your own walking a shield spot is checked against: only the cells your body really enters in that time
+   // count, not everything near the line you walk - a shield there is refused for this tick and looked for again. Three ticks with a full key push on top of the speed
    // reached a block and a half ahead and kept the shield off the very line you walk toward the anchor on.
    private static final int PATH_TICKS = 2;
    // The anchor itself stands from its placement until the detonation - placed, shielded, charged and set off, with at
@@ -1901,9 +1900,6 @@ public class AnchorMacro extends CrystalModule {
             // over for a spot out of your way - unless that one alone would not make the shot safe and the spot in your
             // path would. A spot you step into next tick, or obsidian anywhere on your path, is never used: the first
             // stops you dead the moment it goes up, the second outlasts the blast and stays in your way for good.
-            class_2338 bestInPath = null;
-            float bestInPathGain = 0.0F;
-            String bestInPathNote = null;
             float bestRejectedGain = -1.0F;
             boolean transientRefusal = false;
             // Why each candidate was turned down, by reason, in the order the candidates are tried - the one beside the
@@ -1959,16 +1955,14 @@ public class AnchorMacro extends CrystalModule {
                         if (inPath && this.inYourWay(pos, 1)) {
                            refuse(refused, "where you step next tick - it would stop you dead", label);
                            transientRefusal = true;
-                        } else if (inPath && this.shieldBlock.get() == AnchorMacro.ShieldBlock.Obsidian) {
-                           refuse(refused, "where you are walking - obsidian outlasts the blast and would stay in your way", label);
+                        } else if (inPath) {
+                           // Even a glowstone shield stands until the server's blast update comes back, a round trip
+                           // after the detonation - you would walk into it first.
+                           refuse(refused, "where you are walking - you would run into it before the blast clears it", label);
                            transientRefusal = true;
-                        } else if (!(gain <= (inPath ? bestInPathGain : bestGain))) {
+                        } else if (!(gain <= bestGain)) {
                            if (!LegitPlace.stillClickable(anchorPos, VanillaLimits.blockRange(), pos)) {
                               refuse(refused, HIDES_ANCHOR, label);
-                           } else if (inPath) {
-                              bestInPath = pos;
-                              bestInPathGain = gain;
-                              bestInPathNote = label;
                            } else {
                               best = pos;
                               bestGain = gain;
@@ -1978,18 +1972,6 @@ public class AnchorMacro extends CrystalModule {
                      }
                   }
                }
-            }
-
-            if (bestInPath != null
-               && (
-                  best == null
-                     || bestInPathGain > bestGain
-                        && this.safetyProblemFor(bare - bestGain) != null
-                        && this.safetyProblemFor(bare - bestInPathGain) == null
-               )) {
-               best = bestInPath;
-               bestGain = bestInPathGain;
-               bestNote = bestInPathNote + ", in your walking path";
             }
 
             if (best == null) {
