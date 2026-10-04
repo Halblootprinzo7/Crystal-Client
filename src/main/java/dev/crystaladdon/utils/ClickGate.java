@@ -99,8 +99,14 @@ public final class ClickGate {
       return worldTick < 0 || tick - worldTick >= ticks;
    }
 
+   // Stealth's after-inventory sets how long; never past AFTER_INVENTORY, and never less than the inventory click's
+   // own tick.
    private static boolean inventoryRecently() {
-      return inventoryTick >= 0 && tick - inventoryTick < 4;
+      if (inventoryTick < 0 || tick - inventoryTick >= AFTER_INVENTORY) {
+         return false;
+      } else {
+         return tick - inventoryTick < Math.max(1, Math.min(AFTER_INVENTORY, Stealth.afterInventoryTicks()));
+      }
    }
 
    public static boolean canSwitchSlot() {
@@ -118,9 +124,14 @@ public final class ClickGate {
 
    // Whether a click has to wait for the slot that was just selected. Vanilla reads the number keys before the mouse
    // buttons in the same tick, so a switch and a click in one tick is something a player can do; Stealth's
-   // same-tick-switch allows it, otherwise the click waits a tick after the switch.
+   // same-tick-switch (on by default) allows it, otherwise the click waits a tick after the switch.
    public static boolean slotChangedThisTick() {
       return slotTick == tick && burst <= 1 && !Stealth.sameTickSwitch();
+   }
+
+   // A slot change went out this tick, whatever same-tick-switch and the burst say.
+   public static boolean slotSwitchedThisTick() {
+      return slotTick == tick;
    }
 
    private static void noteWorldAction(Send event) {

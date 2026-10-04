@@ -100,7 +100,7 @@ public class AutoAnchor extends CrystalModule {
          ((meteordevelopment.meteorclient.settings.EnumSetting.Builder)((meteordevelopment.meteorclient.settings.EnumSetting.Builder)((meteordevelopment.meteorclient.settings.EnumSetting.Builder)new meteordevelopment.meteorclient.settings.EnumSetting.Builder()
                      .name("switch-mode"))
                   .description(
-                     "Hotbar really moves your selection onto the item - the number key a tick before the click, while the head still turns or the pace runs out, since a slot has to stand a tick before it clicks. Silent goes back to your slot once a few ticks have passed without a click; its click comes a tick after the switch."
+                     "Hotbar really moves your selection onto the item - the number key ahead of the click, while the head still turns or the pace runs out. Silent goes back to your slot once a few ticks have passed without a click. With Stealth's same-tick-switch off a slot has to stand a tick before it clicks, so a Silent click then comes a tick after the switch."
                   ))
                .defaultValue(AutoAnchor.SwitchMode.Hotbar))
             .build()

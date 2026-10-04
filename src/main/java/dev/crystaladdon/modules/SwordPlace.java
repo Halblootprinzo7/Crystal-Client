@@ -233,6 +233,8 @@ public class SwordPlace extends CrystalModule {
                firstDown = false;
             }
 
+            // A placement is really on its way this tick: a spot under the crosshair and obsidian to put there.
+            boolean placing = false;
             {
                if (firstDown && this.lockout == 0) {
                   this.press.start();
@@ -260,48 +262,38 @@ public class SwordPlace extends CrystalModule {
                }
 
                if (!(Boolean)this.onlyWithWeapon.get() || this.weaponInHand()) {
-                  class_3965 look = this.trace();
-                  if (look != null) {
-                     class_1750 context = new class_1750(this.mc.field_1724, class_1268.field_5808, new class_1799(class_1802.field_8281), look);
-                     if (context.method_7716()) {
-                        class_2338 target = context.method_8037();
-                        if (BlockUtils.canPlaceBlock(target, true, class_2246.field_10540)) {
-                           class_3965 crosshair = LegitPlace.confirmPlacement(
-                              target, class_1802.field_8281, this.mc.field_1724.method_36454(), this.mc.field_1724.method_36455(), this.reach()
-                           );
-                           if (crosshair != null) {
-                              this.previewPos = target;
-                              if (this.press.live()) {
-                                 double sentYaw = LegitPlace.currentYaw();
-                                 double sentPitch = LegitPlace.currentPitch();
-                                 if (!this.onCamera(sentYaw, sentPitch)) {
-                                    if (this.worthTheLook(crosshair)) {
-                                       TurnProgress.requestCamera();
-                                       if ((Boolean)this.debug.get() && !this.saidWaiting) {
-                                          this.saidWaiting = true;
-                                          this.info("Waiting for the look another module holds to come back to your crosshair.", new Object[0]);
-                                       }
-                                    }
-                                 } else {
-                                    class_3965 click = LegitPlace.confirmPlacement(target, class_1802.field_8281, sentYaw, sentPitch, this.reach());
-                                    if (click != null) {
-                                       class_2338 previous = this.lastPlaced;
-                                       this.lastPlaced = target;
-                                       if (!this.place(click)) {
-                                          this.lastPlaced = previous;
-                                          if (this.press.live() && this.worthTheLook(crosshair)) {
-                                             TurnProgress.requestCamera();
-                                          }
-                                       } else {
-                                          this.endPress();
-                                          this.lockout = Math.max(2, Stealth.pace((Integer)this.cooldown.get()));
-                                          if ((Boolean)this.debug.get()) {
-                                             this.info(
-                                                "Sent click -> %d %d %d", new Object[]{target.method_10263(), target.method_10264(), target.method_10260()}
-                                             );
-                                          }
-                                       }
-                                    }
+                  SwordPlace.Spot spot = this.crosshairSpot();
+                  if (spot != null) {
+                     class_2338 target = spot.target();
+                     class_3965 crosshair = spot.hit();
+                     this.previewPos = target;
+                     if (this.press.live()) {
+                        placing = this.worthTheLook(crosshair);
+                        double sentYaw = LegitPlace.currentYaw();
+                        double sentPitch = LegitPlace.currentPitch();
+                        if (!this.onCamera(sentYaw, sentPitch)) {
+                           if (placing) {
+                              TurnProgress.requestCamera();
+                              if ((Boolean)this.debug.get() && !this.saidWaiting) {
+                                 this.saidWaiting = true;
+                                 this.info("Waiting for the look another module holds to come back to your crosshair.", new Object[0]);
+                              }
+                           }
+                        } else {
+                           class_3965 click = LegitPlace.confirmPlacement(target, class_1802.field_8281, sentYaw, sentPitch, this.reach());
+                           if (click != null) {
+                              class_2338 previous = this.lastPlaced;
+                              this.lastPlaced = target;
+                              if (!this.place(click)) {
+                                 this.lastPlaced = previous;
+                                 if (this.press.live() && this.worthTheLook(crosshair)) {
+                                    TurnProgress.requestCamera();
+                                 }
+                              } else {
+                                 this.endPress();
+                                 this.lockout = Math.max(2, Stealth.pace((Integer)this.cooldown.get()));
+                                 if ((Boolean)this.debug.get()) {
+                                    this.info("Sent click -> %d %d %d", new Object[]{target.method_10263(), target.method_10264(), target.method_10260()});
                                  }
                               }
                            }
@@ -311,8 +303,13 @@ public class SwordPlace extends CrystalModule {
                }
             }
 
-            if (this.press.live()) {
-               KeyPriority.hold();
+            // Keep the auras out only while a placement is on its way, or while the obsidian is already borrowed for
+            // one. A press with nothing to place, or one that ran out without a click, lets them back in at once
+            // instead of pausing them for the rest of the press and the hold's 120 ms after it.
+            if (this.press.live() && (placing || this.press.hasSwitched())) {
+               KeyPriority.hold(this);
+            } else {
+               KeyPriority.release(this);
             }
          }
       }
@@ -348,10 +345,7 @@ public class SwordPlace extends CrystalModule {
    }
 
    private void endPress() {
-      if (this.press.live()) {
-         KeyPriority.release();
-      }
-
+      KeyPriority.release(this);
       this.press.end();
       this.pressSlot = -1;
       this.giveBack();
@@ -375,6 +369,7 @@ public class SwordPlace extends CrystalModule {
    private void onKey(KeyEvent event) {
       if (event.action == KeyAction.Press && this.mc.field_1755 == null && ((Keybind)this.bind.get()).matches(event.input)) {
          this.pressLatched = true;
+         this.claimEarly();
       }
    }
 
@@ -382,6 +377,48 @@ public class SwordPlace extends CrystalModule {
    private void onMouse(MouseClickEvent event) {
       if (event.action == KeyAction.Press && this.mc.field_1755 == null && ((Keybind)this.bind.get()).matches(event.input)) {
          this.pressLatched = true;
+         this.claimEarly();
+      }
+   }
+
+   // Claim KeyPriority as soon as the press comes in, not at the end of the tick that acts on it: modules of equal
+   // priority run in an order that changes between launches, and an aura running ahead of Sword Place in that tick
+   // would take its slot change or its click. The same test as onTick's, so a press that cannot place (no obsidian,
+   // someone standing in the cell) never pauses the auras. Meteor posts the key and mouse events before vanilla
+   // marks the key binding down, so worthTheLook's Use-key test holds for a shared Use key too.
+   private void claimEarly() {
+      if (this.mc.field_1724 != null && this.mc.field_1687 != null && this.lockout <= 1) {
+         boolean takes = this.bindIsUseKey() ? this.takesSharedPress() : !(Boolean)this.onlyWithWeapon.get() || this.weaponInHand();
+         if (takes) {
+            SwordPlace.Spot spot = this.crosshairSpot();
+            if (spot != null && this.worthTheLook(spot.hit())) {
+               KeyPriority.hold(this);
+            }
+         }
+      }
+   }
+
+   // The cell obsidian would go into from the crosshair, with the hit that places it there along the camera - or null
+   // when there is none within reach, or the cell is taken (an entity standing in it).
+   private SwordPlace.Spot crosshairSpot() {
+      class_3965 look = this.trace();
+      if (look == null) {
+         return null;
+      } else {
+         class_1750 context = new class_1750(this.mc.field_1724, class_1268.field_5808, new class_1799(class_1802.field_8281), look);
+         if (!context.method_7716()) {
+            return null;
+         } else {
+            class_2338 target = context.method_8037();
+            if (!BlockUtils.canPlaceBlock(target, true, class_2246.field_10540)) {
+               return null;
+            } else {
+               class_3965 crosshair = LegitPlace.confirmPlacement(
+                  target, class_1802.field_8281, this.mc.field_1724.method_36454(), this.mc.field_1724.method_36455(), this.reach()
+               );
+               return crosshair == null ? null : new SwordPlace.Spot(target, crosshair);
+            }
+         }
       }
    }
 
@@ -432,6 +469,9 @@ public class SwordPlace extends CrystalModule {
                   return false;
                }
             } else {
+               // Before the switch: it ends a silent loan, and the weapon may be the slot that loan would have gone
+               // back to (crystals on loan from the sword).
+               int home = HotbarSwap.homeSlot();
                if (!HotbarSwap.select(obsidian.slot())) {
                   return false;
                }
@@ -439,8 +479,10 @@ public class SwordPlace extends CrystalModule {
                // Stay: remember the switch, so only-with-weapon still recognises obsidian as Sword Place's own
                // and the next press works without reselecting the sword by hand.
                this.switchedTo = obsidian.slot();
+               // Only a home slot that holds a weapon counts: when the weapon is the selected item and the loan came
+               // from crystals or blocks, the selected slot is the one the next press must recognise.
                if (this.switchedFrom == -1) {
-                  this.switchedFrom = selected;
+                  this.switchedFrom = home >= 0 && home <= 8 && this.isWeapon(this.mc.field_1724.method_31548().method_5438(home)) ? home : selected;
                }
             }
 
@@ -504,6 +546,14 @@ public class SwordPlace extends CrystalModule {
          return true;
       } else {
          int selected = this.mc.field_1724.method_31548().method_67532();
+         // The selected item is only on loan - Auto Crystal keeps its crystals in hand while it has work - and the
+         // slot it goes back to holds the weapon. The obsidian continues that loan, so the hand still ends up on the
+         // weapon; refusing here dropped the whole press.
+         int home = HotbarSwap.homeSlot();
+         if (home >= 0 && home <= 8 && home != selected && this.isWeapon(this.mc.field_1724.method_31548().method_5438(home))) {
+            return true;
+         }
+
          return this.press.hasSwitched() && selected == this.pressSlot
             ? true
             : this.switchedTo != -1
@@ -603,6 +653,9 @@ public class SwordPlace extends CrystalModule {
          this.left = 0;
          this.switched = false;
       }
+   }
+
+   private record Spot(class_2338 target, class_3965 hit) {
    }
 
    public static enum SwitchMode {

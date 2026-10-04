@@ -85,6 +85,17 @@ public final class HotbarSwap {
       }
    }
 
+   // A module silently borrowed the selected slot in this very tick. The player's own click queued for this tick
+   // must wait: it would go out with the borrowed item (a hit with crystals in hand, a right click that places the
+   // borrowed obsidian), and the slot cannot be handed back before it in the tick of the switch. Held one tick,
+   // onTickLate sees it pending, hands the slot back, and the click follows that switch.
+   public static boolean lentThisTick() {
+      return pendingFrom >= 0
+         && mc.field_1724 != null
+         && mc.field_1724.method_31548().method_67532() == pendingTo
+         && ClickGate.slotSwitchedThisTick();
+   }
+
    public static boolean stillOn(int slot) {
       if (mc.field_1724 != null && slot >= 0) {
          int selected = mc.field_1724.method_31548().method_67532();
@@ -182,7 +193,8 @@ public final class HotbarSwap {
          } else if (ClickGate.canSwitchSlot() && mc.field_1755 == null) {
             // Hand the slot back at once when the player is about to click themselves. Vanilla's use tries the main
             // hand first, so a right-click meant for the off-hand crystals would otherwise place the borrowed item
-            // (Sword Place's obsidian) a second time; ClickGate holds that click one tick and it goes out after.
+            // (Sword Place's obsidian) a second time. The click follows the switch in the same tick, as a number key
+            // and a click would; with Stealth's same-tick-switch off ClickGate holds it one tick instead.
             if (++quietTicks >= quietNeeded || TurnProgress.ownClickPending()) {
                InvUtils.swap(pendingFrom, false);
                InvUtils.previousSlot = pendingOthersPrevious;

@@ -25,6 +25,8 @@ import java.util.Map;
 import java.util.function.BiPredicate;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
+import meteordevelopment.meteorclient.events.meteor.KeyEvent;
+import meteordevelopment.meteorclient.events.meteor.MouseClickEvent;
 import meteordevelopment.meteorclient.events.render.Render3DEvent;
 import meteordevelopment.meteorclient.events.world.TickEvent.Pre;
 import meteordevelopment.meteorclient.renderer.ShapeMode;
@@ -38,6 +40,7 @@ import meteordevelopment.meteorclient.utils.entity.SortPriority;
 import meteordevelopment.meteorclient.utils.entity.TargetUtils;
 import meteordevelopment.meteorclient.utils.entity.fakeplayer.FakePlayerEntity;
 import meteordevelopment.meteorclient.utils.misc.Keybind;
+import meteordevelopment.meteorclient.utils.misc.input.KeyAction;
 import meteordevelopment.meteorclient.utils.player.FindItemResult;
 import meteordevelopment.meteorclient.utils.player.InvUtils;
 import meteordevelopment.meteorclient.utils.player.PlayerUtils;
@@ -529,6 +532,32 @@ public class DoubleTap extends CrystalModule {
 
    @EventHandler
    private void onTick(Pre event) {
+      this.tick();
+      // The press claimed KeyPriority the moment it came in (onKey). One that started nothing - no target in front of
+      // you - lets the auras back in within the same tick.
+      if (this.stage == DoubleTap.Stage.Idle) {
+         KeyPriority.release(this);
+      }
+   }
+
+   // The press claims KeyPriority as it comes in, not in the tick that acts on it: modules of equal priority run in an
+   // order that changes between launches, and an aura running ahead of Double Tap in that tick would take its slot
+   // change or its click.
+   @EventHandler
+   private void onKey(KeyEvent event) {
+      if (event.action == KeyAction.Press && this.mc.field_1755 == null && ((Keybind)this.bind.get()).matches(event.input)) {
+         KeyPriority.hold(this);
+      }
+   }
+
+   @EventHandler
+   private void onMouse(MouseClickEvent event) {
+      if (event.action == KeyAction.Press && this.mc.field_1755 == null && ((Keybind)this.bind.get()).matches(event.input)) {
+         KeyPriority.hold(this);
+      }
+   }
+
+   private void tick() {
       if (this.isActive()) {
          if (this.mc.field_1724 != null && this.mc.field_1687 != null && this.mc.field_1761 != null) {
             if (this.sessionChanged()) {
@@ -550,7 +579,7 @@ public class DoubleTap extends CrystalModule {
                boolean justPressed = pressed && !this.wasPressed;
                this.wasPressed = pressed;
                if (this.stage != DoubleTap.Stage.Idle) {
-                  KeyPriority.hold();
+                  KeyPriority.hold(this);
                   this.advance();
                } else if (justPressed) {
                   this.target = this.findTarget(true);
@@ -605,6 +634,9 @@ public class DoubleTap extends CrystalModule {
                         }
                      }
 
+                     // Held from the first step on: an aura running after Double Tap in this tick would otherwise
+                     // still take the hit's click or the slot change.
+                     KeyPriority.hold(this);
                      this.advance();
                   }
                }
@@ -1738,7 +1770,7 @@ public class DoubleTap extends CrystalModule {
       }
 
       if (this.stage != DoubleTap.Stage.Idle) {
-         KeyPriority.release();
+         KeyPriority.release(this);
       }
 
       this.enter(DoubleTap.Stage.Idle);
