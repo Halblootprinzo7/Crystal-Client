@@ -1499,6 +1499,10 @@ public class AutoCrystal extends CrystalModule {
       class_243 eyes = this.mc.field_1724.method_33571();
       if (box.method_49271(eyes) >= reach * reach) {
          return null;
+      } else if (box.method_1006(eyes) && !Stealth.inView(box.method_1005())) {
+         // Eyes inside the crystal's box: every ray starts in it and lands on the eyes, whatever the look, so the checks
+         // on that point and on the box pass even for a crystal whose centre is behind you. Its centre has to be in view.
+         return null;
       } else {
          if (this.crosshair()) {
             // Along the look the server already has first: a hit there needs no turn.
@@ -2097,7 +2101,9 @@ public class AutoCrystal extends CrystalModule {
          class_238 box = CrystalUtils.crystalHitbox(b);
          double reach = this.breakReach();
          class_243 eyes = this.mc.field_1724.method_33571();
-         return box.method_49271(eyes) < reach * reach && (box.method_1006(eyes) || LegitPlace.forEntity(box, reach, Stealth::allowsLook) != null);
+         // With the eyes inside the box, as in hitAim: only a crystal whose centre is in view.
+         return box.method_49271(eyes) < reach * reach
+            && (box.method_1006(eyes) ? Stealth.inView(box.method_1005()) : LegitPlace.forEntity(box, reach, Stealth::allowsLook) != null);
       });
    }
 
