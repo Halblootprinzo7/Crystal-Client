@@ -21,6 +21,7 @@ import net.minecraft.class_2338;
 import net.minecraft.class_238;
 import net.minecraft.class_243;
 import net.minecraft.class_310;
+import net.minecraft.class_3532;
 import net.minecraft.class_490;
 import net.minecraft.class_9334;
 
@@ -53,7 +54,7 @@ public class Stealth extends CrystalModule {
          ((meteordevelopment.meteorclient.settings.DoubleSetting.Builder)((meteordevelopment.meteorclient.settings.DoubleSetting.Builder)new meteordevelopment.meteorclient.settings.DoubleSetting.Builder()
                   .name("view-angle"))
                .description(
-                  "Only act on what lies within this many degrees of where you are looking. 90 is everything in front of you; anything further means turning around for it, which a module does not do for you."
+                  "Only act on what lies within this many degrees of where you are looking, judged on the point a click really lands on, and never turn the head further than this (at least 90) from your camera's yaw. 90 is everything in front of you; anything further means turning around for it, which a module does not do for you."
                ))
             .defaultValue(90.0)
             .range(45.0, 120.0)
@@ -166,6 +167,25 @@ public class Stealth extends CrystalModule {
 
    public static boolean inView(class_243 point) {
       return AimUtils.withinCone(point, (Double)settings().viewAngle.get());
+   }
+
+   // A click judged on the look it really goes along, not on the box it lands in: the point that look's ray hits has to
+   // lie within view-angle of the camera look, and the look's yaw within view-angle (never less than 90) of the
+   // camera's yaw. inView(box) takes a box as soon as one corner is in the cone, and the cone alone is no limit on
+   // turning: at 90 it is the half-space in front of the eyes, which below a camera pitched down reaches the ground
+   // behind your back - and the only look onto such a point is the camera's yaw plus 180, the server head turning
+   // round. Neither is something a module does for you. The yaw limit holds at a steep camera pitch too: a point on the
+   // ground just behind your feet can sit near the middle of the screen when you look straight down, but the only look
+   // onto it still has the head's yaw swung round, which other players see and an anticheat counts as a turn. Your own
+   // crosshair is never refused for it - its yaw is the camera's. Only a point exactly below the eyes keeps the current
+   // yaw (LegitPlace.yawTowards).
+   public static boolean allowsLook(double yaw, class_243 point) {
+      if (mc.field_1724 == null || point == null) {
+         return false;
+      } else {
+         double yawLimit = Math.max(90.0, viewAngle());
+         return inView(point) && Math.abs(class_3532.method_15338(yaw - mc.field_1724.method_36454())) <= yawLimit;
+      }
    }
 
    public static boolean inView(class_238 box) {

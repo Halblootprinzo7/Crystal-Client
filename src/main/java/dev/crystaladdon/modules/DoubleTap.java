@@ -788,17 +788,20 @@ public class DoubleTap extends CrystalModule {
             double pitch;
             boolean clear;
             if (rotating) {
-               DoubleTap.Look camera = this.cameraLook((y, p) -> LegitPlace.confirmEntity(this.target.method_5829(), y, p, hitReach) != null);
+               DoubleTap.Look camera = this.cameraLook(landsInView(this.target.method_5829(), hitReach));
                if (camera != null) {
                   clear = true;
                   alongCamera = true;
                   yaw = camera.yaw();
                   pitch = camera.pitch();
                } else {
+                  // Every look is judged on the point it hits and its yaw against the camera (Stealth.allowsLook), the
+                  // server's held look and the one at the middle of the box included: the target passes allowsEntity
+                  // with one corner of its box in the cone, while the look onto it can still have you turn round.
                   class_238 box = this.target.method_5829();
-                  BiPredicate<Double, Double> lands = (y, p) -> LegitPlace.confirmEntity(box, y, p, hitReach) != null;
+                  BiPredicate<Double, Double> lands = landsInView(box, hitReach);
                   DoubleTap.Look aim = this.hitAim.choose(this.serverLook(), lands, () -> DoubleTap.HitAim.preferMiddle(this.middleLook(box), lands, () -> {
-                     LegitPlace.EntityResult fresh = LegitPlace.forEntity(box, hitReach);
+                     LegitPlace.EntityResult fresh = LegitPlace.forEntity(box, hitReach, Stealth::allowsLook);
                      return fresh == null ? null : new DoubleTap.Look(fresh.yaw(), fresh.pitch());
                   }));
                   clear = aim != null;
@@ -808,7 +811,7 @@ public class DoubleTap extends CrystalModule {
             } else {
                yaw = LegitPlace.currentYaw();
                pitch = LegitPlace.currentPitch();
-               clear = LegitPlace.confirmEntity(this.target.method_5829(), yaw, pitch, hitReach) != null;
+               clear = landsInView(this.target.method_5829(), hitReach).test(yaw, pitch);
             }
 
             boolean maySwap = this.switchMode.get() != DoubleTap.SwitchMode.None && (Boolean)this.swapWeapon.get();
@@ -829,11 +832,13 @@ public class DoubleTap extends CrystalModule {
                this.skipHit(why);
             } else {
                Runnable action = () -> {
-                  if (!Stealth.allowsEntity(this.target) || LegitPlace.confirmEntity(this.target.method_5829(), yaw, pitch, this.hitReach()) == null) {
+                  if (!Stealth.allowsEntity(this.target) || !landsInView(this.target.method_5829(), this.hitReach()).test(yaw, pitch)) {
                      this.stall("the hit no longer lands on the target from here");
                   } else if (this.clickAllowed()) {
                      if (!ClickGate.canAttack()) {
                         this.stall(clickBusy(true));
+                     } else if (!this.turn.clickLookFree(yaw, pitch)) {
+                        this.stall("another module clicked along a look of its own this tick");
                      } else {
                         int slot = maySwap ? this.bestWeaponSlot() : this.mc.field_1724.method_31548().method_67532();
                         if (slot >= 0 && !stabs(this.mc.field_1724.method_31548().method_5438(slot))) {
@@ -849,6 +854,8 @@ public class DoubleTap extends CrystalModule {
                                  );
                                  this.hitVelocityAge = this.mc.field_1724.field_6012;
                                  HotbarSwap.syncSelected();
+                                 // The hit goes along this look: make sure it is the one this tick's movement packet carries.
+                                 this.turn.noteOwnClick(yaw, pitch);
                                  this.mc.field_1724.field_3944.method_52787(class_2824.method_34206(this.target, this.mc.field_1724.method_5715()));
                                  if ((Boolean)this.swing.get()) {
                                     this.mc.field_1724.method_6104(class_1268.field_5808);
@@ -1058,16 +1065,18 @@ public class DoubleTap extends CrystalModule {
                } else {
                   boolean rotating = this.shouldRotate();
                   double reach = VanillaLimits.entityRange();
-                  DoubleTap.Look camera = rotating ? this.cameraLook((y, p) -> LegitPlace.confirmEntity(crystal.method_5829(), y, p, reach) != null) : null;
+                  DoubleTap.Look camera = rotating ? this.cameraLook(landsInView(crystal.method_5829(), reach)) : null;
                   double yaw;
                   double pitch;
                   if (camera != null) {
                      yaw = camera.yaw();
                      pitch = camera.pitch();
                   } else if (rotating) {
-                     LegitPlace.EntityResult aim = LegitPlace.forEntity(crystal.method_5829(), reach);
+                     // Only looks in view: keep-everything-in-view measures the crystal's position, not the point on its
+                     // box the cheapest look lands on, which beside you can still need the head turned round.
+                     LegitPlace.EntityResult aim = LegitPlace.forEntity(crystal.method_5829(), reach, Stealth::allowsLook);
                      if (aim == null) {
-                        this.stall("no ray from your eyes reaches the crystal");
+                        this.stall("no ray from your eyes reaches the crystal within Stealth's view-angle");
                         return;
                      }
 
@@ -1076,7 +1085,7 @@ public class DoubleTap extends CrystalModule {
                   } else {
                      yaw = LegitPlace.currentYaw();
                      pitch = LegitPlace.currentPitch();
-                     if (LegitPlace.confirmEntity(crystal.method_5829(), yaw, pitch, reach) == null) {
+                     if (!landsInView(crystal.method_5829(), reach).test(yaw, pitch)) {
                         this.stall("the crystal is not under your crosshair and rotate is off");
                         return;
                      }
@@ -1088,13 +1097,15 @@ public class DoubleTap extends CrystalModule {
                   } else {
                      Runnable action = () -> {
                         if (!crystal.method_31481()) {
-                           if (!Stealth.allowsEntity(crystal) || LegitPlace.confirmEntity(crystal.method_5829(), yaw, pitch, reach) == null) {
+                           if (!Stealth.allowsEntity(crystal) || !landsInView(crystal.method_5829(), reach).test(yaw, pitch)) {
                               this.stall("the crystal hit no longer lands from here");
                            } else if (this.lethalToMe(crystal.method_73189())) {
                               this.abort("setting the crystal off would kill you");
                            } else if (this.clickAllowed()) {
                               if (!ClickGate.canAttack()) {
                                  this.stall(clickBusy(true));
+                              } else if (!this.turn.clickLookFree(yaw, pitch)) {
+                                 this.stall("another module clicked along a look of its own this tick");
                               } else {
                                  int slot = this.hittingSlot();
                                  DoubleTap.Held hand = slot < 0 ? null : this.switchTo(slot);
@@ -1105,6 +1116,9 @@ public class DoubleTap extends CrystalModule {
                                        hand.release();
                                     } else {
                                        HotbarSwap.syncSelected();
+                                       // The hit goes along this look: make sure it is the one this tick's movement
+                                       // packet carries.
+                                       this.turn.noteOwnClick(yaw, pitch);
                                        this.mc.field_1724.field_3944.method_52787(class_2824.method_34206(crystal, this.mc.field_1724.method_5715()));
                                        if ((Boolean)this.swing.get()) {
                                           this.mc.field_1724.method_6104(class_1268.field_5808);
@@ -1272,17 +1286,18 @@ public class DoubleTap extends CrystalModule {
       double yaw = LegitPlace.currentYaw();
       double pitch = LegitPlace.currentPitch();
       double blockReach = VanillaLimits.blockRange();
+      // Only clicks along a look in view count (Stealth.allowsLook), as for the clicks themselves.
       if (!spot.isBase()) {
          boolean placeable = rotating
-            ? LegitPlace.forBlock(spot.pos(), blockReach) != null
-            : LegitPlace.confirmPlacement(spot.pos(), class_1802.field_8281, yaw, pitch, blockReach) != null;
+            ? LegitPlace.forBlock(spot.pos(), blockReach, null, false, Stealth::allowsLook) != null
+            : inView(yaw, LegitPlace.confirmPlacement(spot.pos(), class_1802.field_8281, yaw, pitch, blockReach));
          if (!placeable) {
             return false;
          }
       } else if ((Boolean)this.doCrystal.get()) {
          boolean placeable = rotating
-            ? LegitPlace.forCrystal(spot.pos(), blockReach) != null
-            : LegitPlace.confirmCrystal(spot.pos(), yaw, pitch, blockReach) != null;
+            ? LegitPlace.forCrystal(spot.pos(), blockReach, Stealth::allowsLook) != null
+            : inView(yaw, LegitPlace.confirmCrystal(spot.pos(), yaw, pitch, blockReach));
          if (!placeable) {
             return false;
          }
@@ -1293,7 +1308,7 @@ public class DoubleTap extends CrystalModule {
          double entityReach = VanillaLimits.entityRange();
          return !rotating
             ? hitbox.method_49271(this.mc.field_1724.method_33571()) < entityReach * entityReach
-            : LegitPlace.forEntity(hitbox, entityReach) != null;
+            : LegitPlace.forEntity(hitbox, entityReach, Stealth::allowsLook) != null;
       } else {
          return true;
       }
@@ -1397,6 +1412,17 @@ public class DoubleTap extends CrystalModule {
 
    private boolean actionInView(class_243 pos) {
       return !(Boolean)this.keepInView.get() || this.inFrontOfMe(pos);
+   }
+
+   // A hit along (yaw, pitch) that lands on box at a point in view, along a look whose yaw is not turned round from the
+   // camera's (Stealth.allowsLook).
+   private static BiPredicate<Double, Double> landsInView(class_238 box, double reach) {
+      return (y, p) -> Stealth.allowsLook(y, LegitPlace.confirmEntity(box, y, p, reach));
+   }
+
+   // A block click along a look with this yaw that lands, at a point in view (Stealth.allowsLook).
+   private static boolean inView(double yaw, class_3965 hit) {
+      return hit != null && Stealth.allowsLook(yaw, hit.method_17784());
    }
 
    private boolean shouldRotate() {
@@ -1558,7 +1584,7 @@ public class DoubleTap extends CrystalModule {
       } else {
          boolean rotating = this.shouldRotate();
          DoubleTap.Look camera = rotating
-            ? this.cameraLook((y, p) -> LegitPlace.confirmPlacement(pos, class_1802.field_8281, y, p, VanillaLimits.blockRange()) != null)
+            ? this.cameraLook((y, p) -> inView(y, LegitPlace.confirmPlacement(pos, class_1802.field_8281, y, p, VanillaLimits.blockRange())))
             : null;
          double yaw;
          double pitch;
@@ -1566,7 +1592,7 @@ public class DoubleTap extends CrystalModule {
             yaw = camera.yaw();
             pitch = camera.pitch();
          } else if (rotating) {
-            LegitPlace.Result r = LegitPlace.forBlock(pos, VanillaLimits.blockRange());
+            LegitPlace.Result r = LegitPlace.forBlock(pos, VanillaLimits.blockRange(), null, false, Stealth::allowsLook);
             if (r == null) {
                this.sent = false;
                this.stall("no face to place the obsidian against is in reach and view");
@@ -1578,7 +1604,7 @@ public class DoubleTap extends CrystalModule {
          } else {
             yaw = LegitPlace.currentYaw();
             pitch = LegitPlace.currentPitch();
-            if (LegitPlace.confirmPlacement(pos, class_1802.field_8281, yaw, pitch, VanillaLimits.blockRange()) == null) {
+            if (!inView(yaw, LegitPlace.confirmPlacement(pos, class_1802.field_8281, yaw, pitch, VanillaLimits.blockRange()))) {
                this.sent = false;
                this.stall("your crosshair is not on a face that places the obsidian, and rotate is off");
                return;
@@ -1587,9 +1613,9 @@ public class DoubleTap extends CrystalModule {
 
          Runnable action = () -> {
             class_3965 hitResult = LegitPlace.confirmPlacement(pos, class_1802.field_8281, yaw, pitch, VanillaLimits.blockRange());
-            if (hitResult == null) {
+            if (!inView(yaw, hitResult)) {
                this.sent = false;
-               this.stall("the obsidian click no longer lands from here");
+               this.stall("the obsidian click no longer lands in view from here");
             } else if (!InvUtils.findInHotbar(new class_1792[]{class_1802.field_8281}).found()) {
                this.sent = false;
             } else {
@@ -1680,7 +1706,7 @@ public class DoubleTap extends CrystalModule {
       double yaw = LegitPlace.currentYaw();
       if (this.shouldRotate()) {
          DoubleTap.Look server = this.serverLook();
-         boolean kept = server != null && LegitPlace.confirmEntity(this.target.method_5829(), server.yaw(), server.pitch(), this.hitReach()) != null;
+         boolean kept = server != null && landsInView(this.target.method_5829(), this.hitReach()).test(server.yaw(), server.pitch());
          if (!kept) {
             yaw = Rotations.getYaw(this.target.method_5829().method_1005());
          }
@@ -1695,14 +1721,14 @@ public class DoubleTap extends CrystalModule {
          this.stall("the obsidian is outside max-place-angle (keep-everything-in-view)");
       } else {
          boolean rotating = this.shouldRotate();
-         DoubleTap.Look camera = rotating ? this.cameraLook((y, p) -> LegitPlace.confirmCrystal(base, y, p, VanillaLimits.blockRange()) != null) : null;
+         DoubleTap.Look camera = rotating ? this.cameraLook((y, p) -> inView(y, LegitPlace.confirmCrystal(base, y, p, VanillaLimits.blockRange()))) : null;
          double yaw;
          double pitch;
          if (camera != null) {
             yaw = camera.yaw();
             pitch = camera.pitch();
          } else if (rotating) {
-            LegitPlace.Result initial = LegitPlace.forCrystal(base, VanillaLimits.blockRange());
+            LegitPlace.Result initial = LegitPlace.forCrystal(base, VanillaLimits.blockRange(), Stealth::allowsLook);
             if (initial == null) {
                this.sent = false;
                this.stall("no face of the obsidian is in reach and view");
@@ -1714,7 +1740,7 @@ public class DoubleTap extends CrystalModule {
          } else {
             yaw = LegitPlace.currentYaw();
             pitch = LegitPlace.currentPitch();
-            if (LegitPlace.confirmCrystal(base, yaw, pitch, VanillaLimits.blockRange()) == null) {
+            if (!inView(yaw, LegitPlace.confirmCrystal(base, yaw, pitch, VanillaLimits.blockRange()))) {
                this.sent = false;
                this.stall("your crosshair is not on the obsidian, and rotate is off");
                return;
@@ -1726,9 +1752,9 @@ public class DoubleTap extends CrystalModule {
                this.sent = false;
             } else {
                class_3965 hitResult = LegitPlace.confirmCrystal(base, yaw, pitch, VanillaLimits.blockRange());
-               if (hitResult == null) {
+               if (!inView(yaw, hitResult)) {
                   this.sent = false;
-                  this.stall("the crystal click no longer lands from here");
+                  this.stall("the crystal click no longer lands in view from here");
                } else if (!InvUtils.findInHotbar(new class_1792[]{class_1802.field_8301}).found()) {
                   this.sent = false;
                } else {
@@ -1808,8 +1834,15 @@ public class DoubleTap extends CrystalModule {
          } else if (switchedNow(held)) {
             return false;
          } else if (this.mc.field_1724.method_5998(held.hand()).method_31574(item) && (crystal ? this.claimCrystal(false) : Stealth.claimUse())) {
-            VanillaClick.use(hit, (Boolean)this.swing.get());
+            // Only a click that went out counts: VanillaClick sends nothing when another module already clicked this
+            // tick along a different look of its own.
+            int usesBefore = ClickGate.usesThisTick();
+            boolean sent = VanillaClick.use(hit, (Boolean)this.swing.get()) != null || ClickGate.usesThisTick() > usesBefore;
             held.release();
+            if (!sent) {
+               return false;
+            }
+
             this.clicked();
             return true;
          } else {

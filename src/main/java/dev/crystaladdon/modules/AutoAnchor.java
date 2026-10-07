@@ -555,8 +555,17 @@ public class AutoAnchor extends CrystalModule {
       }
    }
 
+   // An anchor already standing is only worth picking when the charge or detonation could reach it: with a turn, along a
+   // look in view (AnchorActions.hitResultFor filters its clicks by Stealth.allowsLook). Its centre in the cone says
+   // nothing about that - behind and below you with the camera pitched down, every face needs the head turned round, and
+   // the same best-scoring anchor would be picked again every tick only to time out. Without a turn the click goes
+   // along your own crosshair, which you aim.
    private boolean clickable(class_2338 pos) {
-      return AnchorActions.charges(pos) >= 0 ? true : AnchorActions.placeHit(pos, this.mustRotate()) != null;
+      if (AnchorActions.charges(pos) >= 0) {
+         return !this.mustRotate() || AnchorActions.hitResultFor(pos, true) != null;
+      } else {
+         return AnchorActions.placeHit(pos, this.mustRotate()) != null;
+      }
    }
 
    private double reach() {

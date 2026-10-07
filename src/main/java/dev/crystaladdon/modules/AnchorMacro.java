@@ -8,6 +8,7 @@ import dev.crystaladdon.utils.AimUtils;
 import dev.crystaladdon.utils.AnchorActions;
 import dev.crystaladdon.utils.BlastShield;
 import dev.crystaladdon.utils.ClickGate;
+import dev.crystaladdon.utils.CrystalUtils;
 import dev.crystaladdon.utils.HotbarSwap;
 import dev.crystaladdon.utils.InventoryGuard;
 import dev.crystaladdon.utils.LegitPlace;
@@ -498,6 +499,9 @@ public class AnchorMacro extends CrystalModule {
    // on an anchor the server refused, so the charged state only counts as seen once the server had time to answer.
    private int chargeSentAt = -1;
    private int detonatedAge;
+   // The anchor was gone on the client the moment our detonation went out: an anchor optimizer took it off, so its
+   // vanishing is no sign of the server's answer (see blastAnswered).
+   private boolean detonatedLocally;
    private boolean spotWaitsOnBlast;
    private boolean pressQueued;
    private final Set<String> heldWarnings = new HashSet<>();
@@ -533,6 +537,7 @@ public class AnchorMacro extends CrystalModule {
       this.shieldKeyWasPressed = false;
       this.detonatedAt = null;
       this.detonatedAge = 0;
+      this.detonatedLocally = false;
       this.pressQueued = false;
       this.walkRepicks = 0;
       this.heldWarnings.clear();
@@ -558,10 +563,11 @@ public class AnchorMacro extends CrystalModule {
 
             this.ticks++;
             this.sightings.tick();
-            if (this.detonatedAt != null && (AnchorActions.charges(this.detonatedAt) <= 0 || ++this.detonatedAge > this.predictionWindow())) {
+            if (this.detonatedAt != null && this.blastAnswered()) {
                this.blastShown = new AnchorMacro.Blast(this.detonatedAt, this.ticks);
                this.detonatedAt = null;
                this.detonatedAge = 0;
+               this.detonatedLocally = false;
             }
 
             // It was our own blast: once the anchor is gone there is nothing to react to, the next cycle may start a tick
@@ -624,7 +630,10 @@ public class AnchorMacro extends CrystalModule {
                   }
 
                   if (start) {
-                     if (this.blastShown != null) {
+                     // Not while our own detonation is still in flight either: until the server's answer is here the
+                     // blocks around it - the support a new anchor would be clicked against, the shield and the cover
+                     // the safety maths count - are still drawn although the blast has already taken them.
+                     if (this.blastShown != null || this.detonatedAt != null) {
                         this.pressQueued = this.trigger.get() == AnchorMacro.Trigger.Press;
                         if (this.mode.get() == AnchorMacro.Mode.BestDamage) {
                            this.findSpot();
@@ -673,16 +682,22 @@ public class AnchorMacro extends CrystalModule {
    // One step a tick, or with click-speed above 20 as many as the tick may carry: each pass sees the world the last
    // click predicted (the anchor placed, the charge in), and stops as soon as a pass sends nothing - a step that needs
    // a different look or the server's answer waits for the next tick as before.
+   // The raised burst is the macro's own and is put back once its passes are done: left raised for the rest of the
+   // tick, it would let the other modules' switches and clicks and your own presses follow the macro's in that tick.
    private void runBurst() {
       int burst = ClickGate.perTick((Double)this.speed.get());
-      ClickGate.allowBurst(burst);
+      int burstBefore = ClickGate.raiseBurst(burst);
 
-      for (int pass = 0; pass < burst && this.working != null; pass++) {
-         int sent = ClickGate.usesThisTick();
-         this.runAt(this.working);
-         if (ClickGate.usesThisTick() == sent) {
-            break;
+      try {
+         for (int pass = 0; pass < burst && this.working != null; pass++) {
+            int sent = ClickGate.usesThisTick();
+            this.runAt(this.working);
+            if (ClickGate.usesThisTick() == sent) {
+               break;
+            }
          }
+      } finally {
+         ClickGate.restoreBurst(burstBefore);
       }
    }
 
@@ -848,9 +863,12 @@ public class AnchorMacro extends CrystalModule {
       return charges < 0 ? AnchorMacro.AnchorState.Air : (charges > 0 ? AnchorMacro.AnchorState.Loaded : AnchorMacro.AnchorState.Anchor);
    }
 
+   // Auto: the whole round trip for the shield's click - travel both ways plus the server tick it waits for - so the
+   // server has answered it before the detonation. The old ping/50 was one to three ticks short of that, and a shield
+   // the server refused still showed here when the anchor went off.
    private int shieldWaitTicks() {
       int fixed = (Integer)this.shieldWait.get();
-      return fixed > 0 ? fixed : Math.max(1, this.predictionWindow() - 3);
+      return fixed > 0 ? fixed : CrystalUtils.confirmTicks(EntityUtils.getPing(this.mc.field_1724));
    }
 
    private int predictionWindow() {
@@ -901,7 +919,7 @@ public class AnchorMacro extends CrystalModule {
       this.countedTick = false;
       boolean unnoticed = AnchorActions.charges(spot) >= 0 && !this.sightings.noticed(spot);
       boolean offhandBusy = InventoryGuard.offhandInFlight();
-      boolean outOfSight = !Stealth.inView(new class_238(spot));
+      boolean outOfSight = this.outOfSight(spot);
       if (this.mustRotate() && TurnProgress.cameraNeeded()) {
          if (++this.cameraTicks > this.cycleTimeout()) {
             if ((Boolean)this.chatInfo.get() || (Boolean)this.debug.get()) {
@@ -1145,6 +1163,14 @@ public class AnchorMacro extends CrystalModule {
                         return;
                      }
 
+                     // The anchor here may still be only the client's guess from our own click: charged before the
+                     // server has answered that click, a placement it refused takes the glowstone onto empty space -
+                     // placed into the air cell - and the detonation then lands on that glowstone. The shield above may
+                     // already go up meanwhile, its support is not this cell; the wait counts toward the cycle timeout.
+                     if (AnchorActions.unconfirmed(spot)) {
+                        return;
+                     }
+
                      AnchorActions.charge(spot, this.options(null, () -> {
                         this.predicted = AnchorMacro.AnchorState.Loaded;
                         this.chargeSentAt = this.ticks;
@@ -1178,7 +1204,11 @@ public class AnchorMacro extends CrystalModule {
                      // above, before the safety check, and is being placed anew.
                      if (this.shieldDone && this.shieldAssumed != null) {
                         int waited = this.ticks - this.shieldSentAt;
-                        if (waited < this.shieldWaitTicks()) {
+                        // With shield-wait on auto, also for as long as the server has not answered the shield's own
+                        // click (within the cycle timeout): until then the shield shown here is our guess, and a refused
+                        // one still looks up. A fixed shield-wait is your own call and is kept as it is.
+                        boolean shieldUnanswered = (Integer)this.shieldWait.get() == 0 && AnchorActions.unconfirmed(this.shieldAssumed);
+                        if (waited < this.shieldWaitTicks() || shieldUnanswered) {
                            // On the last tick of the wait take up the detonator, so the click goes out the moment the
                            // wait ends instead of a tick later; until then the glowstone stays in hand in case the
                            // shield has to go up again.
@@ -1227,11 +1257,32 @@ public class AnchorMacro extends CrystalModule {
 
                         this.detonatedAt = spot;
                         this.detonatedAge = 0;
+                        // A vanilla client leaves the anchor standing until the server's blast arrives; one gone here
+                        // already was taken off by an anchor optimizer as the click went out.
+                        this.detonatedLocally = AnchorActions.charges(spot) < 0;
                         this.finish();
                      }), detonator);
                }
             }
          }
+      }
+   }
+
+   // The spot is out of sight for the click its next step would make, not only for its cell: Stealth.inView(box) takes a
+   // cell as soon as one corner is in the cone, while the face point a turn picks - the cheapest from the look the server
+   // holds - can sit far outside it after you turned the camera mid-cycle. With a turn to make, the step is out of sight
+   // when some face could be clicked but none along a look in view (AnchorActions filters its clicks by that); a step
+   // with no face at all is left to the lines that say so. Without a turn the click goes along your own view or the look
+   // the server holds, which AnchorActions checks the same way.
+   private boolean outOfSight(class_2338 spot) {
+      if (!Stealth.inView(new class_238(spot))) {
+         return true;
+      } else if (!this.mustRotate() || TurnProgress.cameraNeeded()) {
+         return false;
+      } else if (AnchorActions.charges(spot) >= 0) {
+         return AnchorActions.hitResultFor(spot, true) == null && AnchorActions.hitResultFor(spot, true, LegitPlace.ANY_LOOK) != null;
+      } else {
+         return AnchorActions.placeHit(spot, true) == null && AnchorActions.placeHit(spot, true, LegitPlace.ANY_LOOK) != null;
       }
    }
 
@@ -1473,8 +1524,10 @@ public class AnchorMacro extends CrystalModule {
                return false;
             } else {
                this.nextCost = Double.NaN;
-               // While this tick may still carry another of the macro's clicks, the next step may follow at once.
-               int gap = ClickGate.usesThisTick() + 1 < ClickGate.burst() ? 0 : AnchorActions.stepGap();
+               // While this tick may still carry another of the macro's clicks, the next step may follow at once. The
+               // macro's own allowance counts, not whatever burst another module raised in this tick.
+               int allowance = Math.min(ClickGate.burst(), ClickGate.perTick((Double)this.speed.get()));
+               int gap = ClickGate.usesThisTick() + 1 < allowance ? 0 : AnchorActions.stepGap();
                this.nextClickTick = this.ticks + gap;
                this.sightings.pace(gap);
                return true;
@@ -1771,7 +1824,16 @@ public class AnchorMacro extends CrystalModule {
                                        ? AnchorActions.hitResultFor(pos, this.mustRotate())
                                        : AnchorActions.placeHit(pos, this.mustRotate());
                                     if (click == null) {
-                                       cannotPlace++;
+                                       // Only looks in view are planned: a spot whose every click would have to turn
+                                       // round is out of sight, not unplaceable.
+                                       class_3965 anyLook = anchorThere
+                                          ? AnchorActions.hitResultFor(pos, this.mustRotate(), LegitPlace.ANY_LOOK)
+                                          : AnchorActions.placeHit(pos, this.mustRotate(), LegitPlace.ANY_LOOK);
+                                       if (anyLook != null) {
+                                          outOfSight++;
+                                       } else {
+                                          cannotPlace++;
+                                       }
                                     } else {
                                        bestScore = score;
                                        best = pos;
@@ -1856,17 +1918,27 @@ public class AnchorMacro extends CrystalModule {
       }
    }
 
+   // The click that puts the shield at target, along a look in view (Stealth.allowsLook): a face in view is taken over a
+   // cheaper one behind you.
    private class_3965 supportFor(class_2338 target, class_2338 anchorPos) {
+      return this.supportFor(target, anchorPos, Stealth::allowsLook);
+   }
+
+   private class_3965 supportFor(class_2338 target, class_2338 anchorPos, LegitPlace.LookFilter look) {
       double reach = VanillaLimits.blockRange();
       boolean anchorPending = AnchorActions.charges(anchorPos) < 0;
       if (this.mustRotate()) {
-         LegitPlace.Result result = LegitPlace.forBlock(target, reach, anchorPos, anchorPending);
+         LegitPlace.Result result = LegitPlace.forBlock(target, reach, anchorPos, anchorPending, look);
          return result == null ? null : result.hit();
       } else {
          class_3965 hit = LegitPlace.confirmPlacement(
             target, ((AnchorMacro.ShieldBlock)this.shieldBlock.get()).item(), LegitPlace.currentYaw(), LegitPlace.currentPitch(), reach
          );
-         return hit != null && anchorPending && LegitPlace.passesThrough(hit.method_17784(), anchorPos) ? null : hit;
+         if (hit == null || !look.allows(LegitPlace.currentYaw(), hit.method_17784())) {
+            return null;
+         } else {
+            return anchorPending && LegitPlace.passesThrough(hit.method_17784(), anchorPos) ? null : hit;
+         }
       }
    }
 
@@ -1931,11 +2003,12 @@ public class AnchorMacro extends CrystalModule {
                   } else if ((support = this.supportFor(pos, anchorPos)) == null) {
                      if (this.entityBlocksSupport(pos, anchorPos)) {
                         passing = "a crystal or player is in the way of the click";
+                     } else if (this.supportFor(pos, anchorPos, LegitPlace.ANY_LOOK) != null) {
+                        // A face to click exists, only along no look in view - it may come into view as you turn.
+                        passing = "the face to click is out of sight - outside Stealth's view-angle";
                      } else {
                         lasting = "no face you can see or reach to click against, other than the anchor";
                      }
-                  } else if (!Stealth.inView(support.method_17784())) {
-                     passing = "the face to click is out of sight - outside Stealth's view-angle";
                   }
 
                   if (lasting != null) {
@@ -1961,7 +2034,10 @@ public class AnchorMacro extends CrystalModule {
                            refuse(refused, "where you are walking - you would run into it before the blast clears it", label);
                            transientRefusal = true;
                         } else if (!(gain <= bestGain)) {
-                           if (!LegitPlace.stillClickable(anchorPos, VanillaLimits.blockRange(), pos)) {
+                           // Judged with the filter the anchor's own clicks use (AnchorActions.hitResultFor): a shield
+                           // that leaves only faces you would have to turn round for hides the anchor all the same.
+                           LegitPlace.LookFilter anchorLook = this.mustRotate() ? Stealth::allowsLook : LegitPlace.ANY_LOOK;
+                           if (!LegitPlace.stillClickable(anchorPos, VanillaLimits.blockRange(), pos, anchorLook)) {
                               refuse(refused, HIDES_ANCHOR, label);
                            } else {
                               best = pos;
@@ -2072,6 +2148,25 @@ public class AnchorMacro extends CrystalModule {
             return shielded == null ? null : shielded + ", even behind a shield";
          }
       }
+   }
+
+   // Whether the server has answered our detonation. Normally the anchor turning to air (or empty) here is its update,
+   // which comes with the rest of the blast's block changes. An anchor optimizer removes the anchor on the client the
+   // moment the click goes out, so then only time says anything. While the anchor still shows charged the answer is
+   // late - a lag spike, a slow server tick, a stale tab-list ping - far likelier than refused, so the cell stays ours
+   // for much longer; only that long fallback treats the detonation as refused and lets it be clicked again.
+   private boolean blastAnswered() {
+      int left = AnchorActions.charges(this.detonatedAt);
+      ++this.detonatedAge;
+      if (left > 0) {
+         return this.detonatedAge > this.refusedBlastTicks();
+      } else {
+         return !this.detonatedLocally || this.detonatedAge > this.predictionWindow();
+      }
+   }
+
+   private int refusedBlastTicks() {
+      return Math.max(40, 2 * this.predictionWindow());
    }
 
    private boolean blastPending(class_2338 pos) {

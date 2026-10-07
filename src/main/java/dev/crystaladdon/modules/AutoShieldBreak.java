@@ -199,7 +199,9 @@ public class AutoShieldBreak extends CrystalModule {
                         yaw = this.mc.field_1724.method_36454();
                         pitch = this.mc.field_1724.method_36455();
                      } else if (rotating) {
-                        LegitPlace.EntityResult aim = LegitPlace.forEntity(this.target.method_5829(), reach);
+                        // Only looks in view: a box passes allowsEntity with one corner in the cone, and its cheapest
+                        // point can then lie behind you - with the camera pitched down, a player right behind your back.
+                        LegitPlace.EntityResult aim = LegitPlace.forEntity(this.target.method_5829(), reach, Stealth::allowsLook);
                         if (aim == null) {
                            this.putAxeAway();
                            return;
@@ -210,7 +212,8 @@ public class AutoShieldBreak extends CrystalModule {
                      } else {
                         yaw = LegitPlace.currentYaw();
                         pitch = LegitPlace.currentPitch();
-                        if (LegitPlace.confirmEntity(this.target.method_5829(), yaw, pitch, reach) == null) {
+                        // The look the server has may be held anywhere after another module's turn.
+                        if (!Stealth.allowsLook(yaw, LegitPlace.confirmEntity(this.target.method_5829(), yaw, pitch, reach))) {
                            this.putAxeAway();
                            return;
                         }
@@ -276,9 +279,15 @@ public class AutoShieldBreak extends CrystalModule {
                                        && Stealth.allowsEntity(victim)
                                        && disablesBlocking(this.mc.field_1724.method_6047())) {
                                        if (!(Boolean)this.requireCharged.get() || !(this.mc.field_1724.method_7261(0.0F) < (Double)this.charge.get())) {
-                                          if (LegitPlace.confirmEntity(victim.method_5829(), yaw, pitch, this.reach()) != null) {
+                                          // Judged on the point this very look hits, and only when no other clicker sent a
+                                          // click this tick along a different look of its own.
+                                          if (Stealth.allowsLook(yaw, LegitPlace.confirmEntity(victim.method_5829(), yaw, pitch, this.reach()))
+                                             && this.turn.clickLookFree(yaw, pitch)) {
                                              if (Stealth.claimAttack()) {
                                                 HotbarSwap.syncSelected();
+                                                // The hit goes along this look: make sure it is the one this tick's movement
+                                                // packet carries.
+                                                this.turn.noteOwnClick(yaw, pitch);
                                                 this.mc.field_1724.field_3944.method_52787(class_2824.method_34206(victim, this.mc.field_1724.method_5715()));
                                                 if ((Boolean)this.swing.get()) {
                                                    this.mc.field_1724.method_6104(class_1268.field_5808);
