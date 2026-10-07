@@ -443,6 +443,8 @@ public class AnchorMacro extends CrystalModule {
    private int cameraTicks;
    private int sightTicks;
    private int slotTicks;
+   // Ticks of this cycle spent waiting for the server to acknowledge our own click (waitAcknowledged).
+   private int ackTicks;
    private boolean countedTick;
    private double nextCost = Double.NaN;
    private double nextCycleCost = Double.NaN;
@@ -644,7 +646,12 @@ public class AnchorMacro extends CrystalModule {
                         }
                      } else {
                         class_2338 spot = this.findSpot();
-                        if (spot != null) {
+                        if (spot != null && AnchorActions.Blasts.inFlightNear(spot, AnchorActions.Blasts.REACH)) {
+                           // Another's detonation - Auto Anchor's, or your own right-click - is still in flight near the
+                           // spot: as with our own above, the blocks around it are still drawn although its blast has
+                           // already taken them. The press waits for the server's answer instead of being lost.
+                           this.pressQueued = this.trigger.get() == AnchorMacro.Trigger.Press;
+                        } else if (spot != null) {
                            if (this.trigger.get() == AnchorMacro.Trigger.Hold) {
                               if (Double.isNaN(this.nextCycleCost)) {
                                  this.nextCycleCost = Stealth.actionCost();
@@ -1166,8 +1173,9 @@ public class AnchorMacro extends CrystalModule {
                      // The anchor here may still be only the client's guess from our own click: charged before the
                      // server has answered that click, a placement it refused takes the glowstone onto empty space -
                      // placed into the air cell - and the detonation then lands on that glowstone. The shield above may
-                     // already go up meanwhile, its support is not this cell; the wait counts toward the cycle timeout.
+                     // already go up meanwhile, its support is not this cell (see waitAcknowledged for the timeout).
                      if (AnchorActions.unconfirmed(spot)) {
+                        this.waitAcknowledged();
                         return;
                      }
 
@@ -1182,6 +1190,20 @@ public class AnchorMacro extends CrystalModule {
                   case Loaded:
                      int charges = AnchorActions.charges(spot);
                      if (charges <= 0) {
+                        return;
+                     }
+
+                     if (AnchorActions.Blasts.inFlight(spot)) {
+                        // Someone else's detonation - Auto Anchor's, or your own right-click - is already on its way to
+                        // this anchor; a second one, a top-up or a shield would all land on an anchor the server has
+                        // already removed. The cycle ends once the anchor is gone (the checks above); should the server
+                        // refuse that blast, the anchor is ours again once AnchorActions.Blasts lets it go. Waiting on
+                        // the server is no fault of the spot's: the tick does not count toward the cycle timeout.
+                        if (this.countedTick) {
+                           this.cycleTicks--;
+                           this.countedTick = false;
+                        }
+
                         return;
                      }
 
@@ -1205,10 +1227,15 @@ public class AnchorMacro extends CrystalModule {
                      if (this.shieldDone && this.shieldAssumed != null) {
                         int waited = this.ticks - this.shieldSentAt;
                         // With shield-wait on auto, also for as long as the server has not answered the shield's own
-                        // click (within the cycle timeout): until then the shield shown here is our guess, and a refused
-                        // one still looks up. A fixed shield-wait is your own call and is kept as it is.
+                        // click: until then the shield shown here is our guess, and a refused one still looks up. A fixed
+                        // shield-wait is your own call and is kept as it is. Past shield-wait, that wait is one for the
+                        // server's acknowledgement (waitAcknowledged).
                         boolean shieldUnanswered = (Integer)this.shieldWait.get() == 0 && AnchorActions.unconfirmed(this.shieldAssumed);
                         if (waited < this.shieldWaitTicks() || shieldUnanswered) {
+                           if (waited >= this.shieldWaitTicks()) {
+                              this.waitAcknowledged();
+                           }
+
                            // On the last tick of the wait take up the detonator, so the click goes out the moment the
                            // wait ends instead of a tick later; until then the glowstone stays in hand in case the
                            // shield has to go up again.
@@ -1286,6 +1313,20 @@ public class AnchorMacro extends CrystalModule {
       }
    }
 
+   // A wait for the server to acknowledge a click of our own (AnchorActions.unconfirmed): a round trip and a server tick,
+   // no fault of the spot's - the cycle timeout is there for a spot that can never work. The tick is given back, as
+   // waitWalking does, for up to a limit of its own; past it the wait counts again and the cycle timeout ends it.
+   private void waitAcknowledged() {
+      if (this.countedTick && ++this.ackTicks <= this.ackLimit()) {
+         this.cycleTicks--;
+         this.countedTick = false;
+      }
+   }
+
+   private int ackLimit() {
+      return 2 * Math.max(this.predictionWindow(), CrystalUtils.confirmTicks(EntityUtils.getPing(this.mc.field_1724)));
+   }
+
    private void waitUnsafe(String why) {
       if (!this.unsafeWarned && ((Boolean)this.chatInfo.get() || (Boolean)this.debug.get())) {
          this.report("Holding the anchor at %s until it is safe: %s.", format(this.working), why);
@@ -1299,6 +1340,7 @@ public class AnchorMacro extends CrystalModule {
       this.shieldRetries = 0;
       this.shieldReported = false;
       this.walkTicks = 0;
+      this.ackTicks = 0;
       this.walkWarned = false;
       this.faceWarned = false;
       this.chargeSentAt = -1;
@@ -2169,8 +2211,11 @@ public class AnchorMacro extends CrystalModule {
       return Math.max(40, 2 * this.predictionWindow());
    }
 
+   // Our own detonation of pos, or anyone else's still in flight (AnchorActions.Blasts): Auto Anchor's, or your own
+   // right-click. The anchor stays drawn charged until the server's blast arrives, and a second detonation would land on
+   // an anchor the server has already removed.
    private boolean blastPending(class_2338 pos) {
-      return this.detonatedAt != null && this.detonatedAt.equals(pos);
+      return this.detonatedAt != null && this.detonatedAt.equals(pos) || AnchorActions.Blasts.inFlight(pos);
    }
 
    private float selfDamageBehind(class_243 center, class_2338 shieldAt) {
@@ -2218,7 +2263,7 @@ public class AnchorMacro extends CrystalModule {
                   spot.method_10260()
                );
             } else if (this.blastPending(spot)) {
-               return "The anchor you just set off has not gone yet on your screen - waiting for the server.";
+               return "The anchor just set off there has not gone yet on your screen - waiting for the server.";
             } else if (!Stealth.inView(spot.method_46558())) {
                return "The spot is out of sight - outside Stealth's view-angle.";
             } else if (!Stealth.allowsBlock(spot, spot.method_46558())) {

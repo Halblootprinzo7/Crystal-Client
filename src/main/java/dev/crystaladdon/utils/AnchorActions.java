@@ -12,7 +12,10 @@ import java.util.function.Consumer;
 import java.util.function.IntPredicate;
 import java.util.function.Predicate;
 import meteordevelopment.meteorclient.MeteorClient;
+import meteordevelopment.meteorclient.events.entity.player.InteractBlockEvent;
+import meteordevelopment.meteorclient.events.packets.PacketEvent.Sent;
 import meteordevelopment.meteorclient.events.world.TickEvent.Pre;
+import meteordevelopment.meteorclient.utils.entity.EntityUtils;
 import meteordevelopment.meteorclient.utils.player.FindItemResult;
 import meteordevelopment.meteorclient.utils.player.InvUtils;
 import meteordevelopment.meteorclient.utils.player.Rotations;
@@ -31,6 +34,7 @@ import net.minecraft.class_1792;
 import net.minecraft.class_1799;
 import net.minecraft.class_1802;
 import net.minecraft.class_1826;
+import net.minecraft.class_1937;
 import net.minecraft.class_2246;
 import net.minecraft.class_2338;
 import net.minecraft.class_2350;
@@ -40,6 +44,7 @@ import net.minecraft.class_2680;
 import net.minecraft.class_2741;
 import net.minecraft.class_2885;
 import net.minecraft.class_310;
+import net.minecraft.class_3532;
 import net.minecraft.class_3489;
 import net.minecraft.class_3965;
 import net.minecraft.class_638;
@@ -469,6 +474,10 @@ public final class AnchorActions {
             }
 
             return false;
+         } else if (!turn.clickLookFree(LegitPlace.currentYaw(), LegitPlace.currentPitch())) {
+            // VanillaClick.use would send nothing this tick (TurnProgress.noteOwnClick refuses the look): asked first, so
+            // no switch goes out and the gate spends no allowance or step gap on a click that never leaves.
+            return false;
          } else {
             HotbarSwap silent = null;
             if (swap) {
@@ -600,6 +609,148 @@ public final class AnchorActions {
 
       static {
          MeteorClient.EVENT_BUS.subscribe(AnchorActions.ClientTicks.class);
+      }
+   }
+
+   // Blasts in flight, shared by every anchor module: charged anchors a detonating click went out on - the macro's, Auto
+   // Anchor's or your own right-click - whose blast the server has not answered yet. A vanilla client leaves such an
+   // anchor drawn charged until the server's update arrives about a round trip later. A module that knew only its own
+   // detonation (AnchorMacro.detonatedAt, AnchorSequence.awaitingBlast) took another's for a charged anchor ready to set
+   // off, and sent a second detonation onto an anchor the server had already removed.
+   public static final class Blasts {
+      // The farthest an anchor's blast reaches - its damage radius, twice its power of 5. The blocks and cover inside it
+      // may already be gone on the server while they are still drawn here.
+      public static final double REACH = 10.0;
+      private static final Map<Long, Integer> sentAt = new HashMap<>();
+      // Anchors the client took off itself the moment the click went out (an anchor optimizer): their vanishing says
+      // nothing about the server's answer, so only time clears them.
+      private static final Set<Long> takenLocally = new HashSet<>();
+      // Whether the click interactBlock is sending now detonates, judged before the client's own prediction runs: once it
+      // has, a charge it predicted already shows, and the last glowstone it used is gone from the hand.
+      private static long beforePos;
+      private static boolean beforeDetonates;
+      private static boolean beforeValid;
+      private static Object world;
+
+      private Blasts() {
+      }
+
+      static void start() {
+      }
+
+      public static boolean inFlight(class_2338 pos) {
+         forgetIfNewWorld();
+         return sentAt.containsKey(pos.method_10063());
+      }
+
+      public static boolean inFlightNear(class_2338 pos, double radius) {
+         forgetIfNewWorld();
+
+         for (long key : sentAt.keySet()) {
+            if (class_2338.method_10092(key).method_10262(pos) <= radius * radius) {
+               return true;
+            }
+         }
+
+         return false;
+      }
+
+      // Whether a main-hand click on pos sets an anchor off right now, as vanilla's interactBlock decides it: a charged
+      // anchor outside the Nether (there it sets your spawn), no sneaking with something in hand (the block is not used
+      // at all), and no glowstone to charge it instead - in the main hand, or in the offhand behind a main hand without
+      // it (RespawnAnchorBlock.onUseWithItem) - unless it is full. An offhand click never detonates: only the main hand
+      // gets to the block's own use.
+      static boolean detonatesNow(class_2338 pos) {
+         if (mc.field_1724 == null || mc.field_1687 == null || mc.field_1724.method_7325()) {
+            return false;
+         } else {
+            int charges = charges(pos);
+            if (charges <= 0 || mc.field_1687.method_27983() == class_1937.field_25180) {
+               return false;
+            } else if (sneakBlocksInteraction(mc.field_1724.method_6047())) {
+               return false;
+            } else {
+               return charges >= MAX_CHARGES || !mc.field_1724.method_6047().method_31574(class_1802.field_8801) && !offhandBlocksDetonation(charges);
+            }
+         }
+      }
+
+      private static int window() {
+         int ping = mc.field_1724 == null ? 0 : EntityUtils.getPing(mc.field_1724);
+         return class_3532.method_15340(ping / 50 + 3, 3, 40);
+      }
+
+      private static void forgetIfNewWorld() {
+         if (mc.field_1687 != world) {
+            sentAt.clear();
+            takenLocally.clear();
+            beforeValid = false;
+            world = mc.field_1687;
+         }
+      }
+
+      @EventHandler(
+         priority = 9999
+      )
+      private static void onTick(Pre event) {
+         forgetIfNewWorld();
+         beforeValid = false;
+         if (!sentAt.isEmpty()) {
+            int now = AnchorActions.ClientTicks.now();
+            int window = window();
+            // As AnchorMacro.refusedBlastTicks: an anchor still charged this long after the click was refused.
+            int fallback = Math.max(40, 2 * window);
+            sentAt.entrySet().removeIf(entry -> {
+               int age = now - entry.getValue();
+               if (age <= 0) {
+                  return false;
+               } else {
+                  long key = entry.getKey();
+                  boolean answered = takenLocally.contains(key) ? age > window : charges(class_2338.method_10092(key)) <= 0 || age > fallback;
+                  if (answered) {
+                     takenLocally.remove(key);
+                  }
+
+                  return answered;
+               }
+            });
+         }
+      }
+
+      @EventHandler
+      private static void onInteractBlock(InteractBlockEvent event) {
+         if (mc.method_18854() && event.result != null) {
+            class_2338 pos = event.result.method_17777();
+            beforePos = pos.method_10063();
+            beforeDetonates = detonatesNow(pos);
+            beforeValid = true;
+         }
+      }
+
+      @EventHandler
+      private static void onSent(Sent event) {
+         if (event.packet instanceof class_2885 interact && mc.method_18854() && mc.field_1687 != null && mc.field_1724 != null) {
+            class_2338 pos = interact.method_12543().method_17777();
+            long key = pos.method_10063();
+            boolean judgedBefore = beforeValid && beforePos == key;
+            beforeValid = false;
+            // A packet sent without interactBlock had no prediction run for it: the state now is what the server judges.
+            boolean detonates = interact.method_12546() == class_1268.field_5808 && (judgedBefore ? beforeDetonates : detonatesNow(pos));
+            if (detonates) {
+               forgetIfNewWorld();
+               sentAt.put(key, AnchorActions.ClientTicks.now());
+               if (charges(pos) < 0) {
+                  takenLocally.add(key);
+               } else {
+                  takenLocally.remove(key);
+               }
+            }
+         }
+      }
+
+      static {
+         AnchorActions.ClientTicks.start();
+         MeteorClient.EVENT_BUS.subscribe(AnchorActions.Blasts.class);
       }
    }
 
@@ -736,6 +887,8 @@ public final class AnchorActions {
 
       public Sightings() {
          AnchorActions.ClientTicks.start();
+         // Listening from the start, so your own right-clicks are known before any anchor module first asks.
+         AnchorActions.Blasts.start();
       }
 
       private static int now() {

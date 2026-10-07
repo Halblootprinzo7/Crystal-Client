@@ -13,11 +13,13 @@ import meteordevelopment.meteorclient.systems.config.Config;
 import meteordevelopment.meteorclient.utils.player.Rotations;
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.class_2824;
+import net.minecraft.class_2846;
 import net.minecraft.class_2885;
 import net.minecraft.class_2886;
 import net.minecraft.class_310;
 import net.minecraft.class_315;
 import net.minecraft.class_3532;
+import net.minecraft.class_2846.class_2847;
 
 public final class TurnProgress {
    public static final TurnProgress SHARED = new TurnProgress();
@@ -62,6 +64,13 @@ public final class TurnProgress {
    private static Field meteorEntryYaw;
    private static Field meteorEntryPitch;
    private static boolean meteorEntryUnreadable;
+   private static Field meteorEntryPriority;
+   private static Field meteorEntryCallback;
+   private static boolean meteorEntryDetailUnreadable;
+   // The tick onMovementQueue dropped a foreign rotation with an action of its own (its callback) to keep our pinned
+   // look: one queued after our click had already gone out, too late to be refused. Our clicks and turns stand back on
+   // the tick after, so that module's retry goes out with its own look instead of being dropped again.
+   private int droppedForeignTick = -10;
    // The entry in Meteor's rotation queue that holds the look our clicks of this tick go along, and the tick it is for.
    // onMovementQueue sends it whatever else is queued: Meteor sorts equal priorities by arrival, so a foreign rotation
    // queued earlier at Integer.MAX_VALUE would otherwise go out instead, and the server would judge our click along a
@@ -109,6 +118,9 @@ public final class TurnProgress {
       } else if (refusesLook(yaw, pitch)) {
          return false;
       } else if (mc.field_1724.field_6012 != this.lastSentTick && this.interactionTick == this.clientTick) {
+         return false;
+      } else if (mc.field_1724.field_6012 != this.lastSentTick && this.yieldsToForeign(yaw, pitch)) {
+         // turnTo refuses this look now (see yieldsToForeign): no reach to report.
          return false;
       } else if (!this.claim(requester, priority)) {
          return false;
@@ -178,6 +190,10 @@ public final class TurnProgress {
          return false;
       } else if (mc.field_1724.field_6012 != this.lastSentTick && this.interactionTick == this.clientTick) {
          return false;
+      } else if (mc.field_1724.field_6012 != this.lastSentTick && this.yieldsToForeign(yaw, pitch)) {
+         // Our look pinned on top would bury another module's rotation and the place, mine or throw that waits on it
+         // (see yieldsToForeign): the turn waits a tick instead, as after another clicker's interaction.
+         return false;
       } else if (!this.claim(requester, priority)) {
          return false;
       } else if (mc.field_1724.field_6012 == this.lastSentTick) {
@@ -217,7 +233,7 @@ public final class TurnProgress {
                return true;
             } else {
                double progress = ease((double)this.planStep / this.planTicks, smooth);
-               double stepYaw = this.startYaw + class_3532.method_15338(this.targetYaw - this.startYaw) * progress;
+               double stepYaw = this.startYaw + yawDelta(this.startYaw, this.targetYaw) * progress;
                double stepPitch = this.startPitch + (this.targetPitch - this.startPitch) * progress;
                if (smooth > 0.0) {
                   stepYaw += (Math.random() * 2.0 - 1.0) * 0.2 * smooth;
@@ -228,6 +244,14 @@ public final class TurnProgress {
                double fromPitch = Double.isNaN(this.sentPitch) ? mc.field_1724.method_36455() : this.sentPitch;
                stepYaw = VanillaLimits.limitTurn(fromYaw, stepYaw, cap);
                stepPitch = class_3532.method_15350(VanillaLimits.limitPitch(fromPitch, stepPitch, cap), -90.0, 90.0);
+               if (this.foreignLookConflict(stepYaw, stepPitch)) {
+                  // A foreign rotation queued with the target's very look passed the check above; the step look
+                  // would still bury it. This step waits a tick.
+                  this.planStep--;
+                  this.blocked = true;
+                  return false;
+               }
+
                this.pin(stepYaw, stepPitch);
                this.noteTickRotation(stepYaw, stepPitch);
                this.lastSentTick = mc.field_1724.field_6012;
@@ -282,12 +306,20 @@ public final class TurnProgress {
    // this tick's movement packet - Meteor's Kill Aura queues its look and hits along it at once. Only one look goes out
    // with the packet: pinning ours would leave that hit judged along a look it was never sent with, and leaving theirs
    // would do the same to ours. turnTo refuses a new look after another interaction in the tick for the same reason.
+   // Nor when pinning our look would bury another module's rotation that must go out with its own look (yieldsToForeign):
+   // the click then waits a tick and that module's place, mine or throw goes out first.
    public boolean clickLookFree(double yaw, double pitch) {
       if (mc.field_1724 == null || this.movementSent()) {
          return true;
       } else {
          this.forgetIfNewPlayer();
-         if (this.interactionTick != this.clientTick || this.ownClickTick == this.clientTick || mc.field_1724.field_6012 == this.lastSentTick) {
+         if (this.ownClickTick == this.clientTick || mc.field_1724.field_6012 == this.lastSentTick) {
+            // A click or turn of ours already decided this tick's look: a further click along it changes nothing, and
+            // a foreign rotation queued since has to give way to the click that already went out (easeBack).
+            return true;
+         } else if (this.yieldsToForeign(yaw, pitch)) {
+            return false;
+         } else if (this.interactionTick != this.clientTick) {
             return true;
          } else {
             List<?> queue = meteorQueueList();
@@ -323,6 +355,86 @@ public final class TurnProgress {
             return null;
          }
       }
+   }
+
+   // Loads the priority and callback fields of Meteor's queue entries; false when they cannot be read.
+   private static boolean entryDetailReadable(Object entry) {
+      if (entry == null || meteorEntryDetailUnreadable) {
+         return false;
+      } else {
+         try {
+            if (meteorEntryCallback == null || meteorEntryCallback.getDeclaringClass() != entry.getClass()) {
+               Field priority = entry.getClass().getDeclaredField("priority");
+               Field callback = entry.getClass().getDeclaredField("callback");
+               priority.setAccessible(true);
+               callback.setAccessible(true);
+               meteorEntryPriority = priority;
+               meteorEntryCallback = callback;
+            }
+
+            return true;
+         } catch (RuntimeException | ReflectiveOperationException var2) {
+            meteorEntryDetailUnreadable = true;
+            return false;
+         }
+      }
+   }
+
+   // The action a Meteor queue entry runs once its look went out (Surround's place, Packet Mine's mine, NoFall's
+   // bucket...), null when it has none. Throws when it cannot be read.
+   private static Runnable queuedCallback(Object entry) throws ReflectiveOperationException {
+      if (!entryDetailReadable(entry)) {
+         throw new ReflectiveOperationException("Meteor rotation callback unreadable");
+      } else {
+         return (Runnable)meteorEntryCallback.get(entry);
+      }
+   }
+
+   // Whether a foreign entry must go out with its own look this tick: it carries an action of its own, or it is queued
+   // at Integer.MAX_VALUE, which nothing does for a look it could do without (NoFall's air place). An entry that cannot
+   // be read counts as one.
+   private static boolean queuedLookNeeded(Object entry) {
+      try {
+         if (queuedCallback(entry) != null) {
+            return true;
+         } else {
+            return meteorEntryPriority.getInt(entry) == Integer.MAX_VALUE;
+         }
+      } catch (RuntimeException | ReflectiveOperationException var2) {
+         meteorEntryDetailUnreadable = true;
+         return true;
+      }
+   }
+
+   // Whether Meteor's queue holds a foreign rotation that pinning (yaw, pitch) would bury: one that must go out with its
+   // own look (queuedLookNeeded) and holds a different one. onMovementQueue sends one look a tick and drops the rest,
+   // callbacks and all - Surround's obsidian would never be placed, NoFall's block never put under you. A foreign
+   // rotation with our very look is no conflict: onMovementQueue runs its action along the look that goes out. Nor is
+   // one without an action below Integer.MAX_VALUE (Kill Aura on Always, Freecam, AntiAFK): pinning over it costs
+   // nothing.
+   private boolean foreignLookConflict(double yaw, double pitch) {
+      List<?> queue = meteorQueueList();
+      if (queue != null) {
+         for (Object entry : queue) {
+            if (entry == this.pinnedEntry && this.pinnedTick == this.clientTick) {
+               continue;
+            }
+
+            double[] look = queuedLook(entry);
+            if ((look == null || !sameRotation(look[0], look[1], yaw, pitch)) && queuedLookNeeded(entry)) {
+               return true;
+            }
+         }
+      }
+
+      return false;
+   }
+
+   // Whether a click or turn of ours that is not out yet stands back this tick for another module's rotation: one queued
+   // now that our pin would bury (foreignLookConflict), or the retry of one onMovementQueue had to drop last tick for a
+   // click of ours that was already out (droppedForeignTick) - that module queues it again this tick, maybe after us.
+   private boolean yieldsToForeign(double yaw, double pitch) {
+      return this.droppedForeignTick == this.clientTick - 1 || this.foreignLookConflict(yaw, pitch);
    }
 
    // Pinned on top it goes out and onMovementQueue drops the rest; easeBack brings it home to the camera afterwards.
@@ -383,8 +495,29 @@ public final class TurnProgress {
    private void onMovementQueue(meteordevelopment.meteorclient.events.entity.player.SendMovementPacketsEvent.Pre event) {
       List<?> queue = meteorQueueList();
       if (queue != null && queue.size() > 1) {
-         // Our pinned look goes out if it is queued at all, also behind a foreign entry of the same priority.
+         // Our pinned look goes out if it is queued at all, also behind a foreign entry of the same priority. A pin of
+         // ours only lands behind a foreign entry that must go out with a different look (queuedLookNeeded) when that
+         // entry was queued after our click had already gone out: clickLookFree and turnTo refuse one queued before.
+         // The click cannot be taken back, so that look loses (droppedForeignTick lets its retry through next tick).
          int keep = this.pinnedTick == this.clientTick ? indexOfSame(queue, this.pinnedEntry) : -1;
+         Object kept = queue.get(Math.max(0, keep));
+         List<Runnable> carried = new ArrayList<>();
+         boolean dropped = false;
+
+         for (int i = 0; i < queue.size(); i++) {
+            Object entry = queue.get(i);
+            if (entry != kept) {
+               Runnable callback = foreignCallbackOrNull(entry);
+               if (callback != null) {
+                  if (sameLook(entry, kept)) {
+                     carried.add(callback);
+                  } else if (keep >= 0) {
+                     dropped = true;
+                  }
+               }
+            }
+         }
+
          for (int i = 0; i < keep; i++) {
             queue.remove(0);
          }
@@ -392,6 +525,52 @@ public final class TurnProgress {
          while (queue.size() > 1) {
             queue.remove(queue.size() - 1);
          }
+
+         // An action queued along the very look that goes out still runs, after the movement packet that carries it,
+         // as Meteor would have run it had it gone out first.
+         if (!carried.isEmpty() && !carryCallbacks(kept, carried)) {
+            dropped |= keep >= 0;
+         }
+
+         if (dropped) {
+            this.droppedForeignTick = this.clientTick;
+         }
+      }
+   }
+
+   private static Runnable foreignCallbackOrNull(Object entry) {
+      try {
+         return queuedCallback(entry);
+      } catch (RuntimeException | ReflectiveOperationException var2) {
+         return null;
+      }
+   }
+
+   private static boolean sameLook(Object a, Object b) {
+      double[] lookA = queuedLook(a);
+      double[] lookB = queuedLook(b);
+      return lookA != null && lookB != null && sameRotation(lookA[0], lookA[1], lookB[0], lookB[1]);
+   }
+
+   // Runs the carried actions after the kept entry's own: Meteor runs the kept entry's callback once its look went out.
+   private static boolean carryCallbacks(Object kept, List<Runnable> carried) {
+      try {
+         Runnable own = queuedCallback(kept);
+         List<Runnable> actions = new ArrayList<>();
+         if (own != null) {
+            actions.add(own);
+         }
+
+         actions.addAll(carried);
+         meteorEntryCallback.set(kept, (Runnable)() -> {
+            for (Runnable action : actions) {
+               action.run();
+            }
+         });
+         return true;
+      } catch (RuntimeException | ReflectiveOperationException var4) {
+         meteorEntryDetailUnreadable = true;
+         return false;
       }
    }
 
@@ -581,6 +760,13 @@ public final class TurnProgress {
    private void onPacketSent(Send event) {
       if (event.packet instanceof class_2824 || event.packet instanceof class_2885 || event.packet instanceof class_2886) {
          this.interactionTick = this.clientTick;
+      } else if (event.packet instanceof class_2846 action
+         && (action.method_12363() == class_2847.field_12968
+            || action.method_12363() == class_2847.field_12973
+            || action.method_12363() == class_2847.field_12971)) {
+         // Mining is a click along the look too: a dig another module sent this tick (Packet Mine or Nuker without
+         // rotate) is judged along this tick's look like any other click, so no different look of ours goes after it.
+         this.interactionTick = this.clientTick;
       }
    }
 
@@ -664,8 +850,25 @@ public final class TurnProgress {
       }
    }
 
+   // The way a turn goes from one yaw to another: the shorter arc, unless both lie within the yaw a look may have off the
+   // camera's (Stealth.allowsLook: view-angle, never less than 90) and that arc leaves it. Then the long way round,
+   // through the camera's yaw: with a view-angle above 90, two allowed looks on either side were joined through the
+   // camera's yaw plus 180, and the steps on the way sent the head round behind you.
+   private static double yawDelta(double fromYaw, double toYaw) {
+      double shortest = class_3532.method_15338(toYaw - fromYaw);
+      if (mc.field_1724 == null) {
+         return shortest;
+      } else {
+         double camera = mc.field_1724.method_36454();
+         double limit = Math.max(90.0, Stealth.viewAngle());
+         double from = class_3532.method_15338(fromYaw - camera);
+         double to = class_3532.method_15338(toYaw - camera);
+         return Math.abs(from) <= limit && Math.abs(to) <= limit ? to - from : shortest;
+      }
+   }
+
    private static int ticksFor(double fromYaw, double fromPitch, double yaw, double pitch, double cap, double smooth) {
-      double distance = Math.max(Math.abs(class_3532.method_15338(yaw - fromYaw)), Math.abs(pitch - fromPitch));
+      double distance = Math.max(Math.abs(yawDelta(fromYaw, yaw)), Math.abs(pitch - fromPitch));
       if (distance <= cap) {
          return 1;
       } else {

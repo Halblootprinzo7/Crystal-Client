@@ -500,7 +500,11 @@ public class SwordPlace extends CrystalModule {
          }
 
          boolean sent = false;
-         if (this.mc.field_1724.method_5998(hand).method_31574(class_1802.field_8281) && Stealth.claimUse()) {
+         // The look is asked about before claimUse spends the allowance: VanillaClick.use sends nothing when
+         // TurnProgress refuses it this tick.
+         if (this.mc.field_1724.method_5998(hand).method_31574(class_1802.field_8281)
+            && TurnProgress.SHARED.clickLookFree(LegitPlace.currentYaw(), LegitPlace.currentPitch())
+            && Stealth.claimUse()) {
             // use() returns null when nothing went out (breaking a block, riding); only a sent click uses the press up.
             int usesBefore = ClickGate.usesThisTick();
             sent = VanillaClick.use(hit, (Boolean)this.swing.get()) != null || ClickGate.usesThisTick() > usesBefore;

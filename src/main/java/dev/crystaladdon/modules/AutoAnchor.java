@@ -6,6 +6,7 @@ import dev.crystaladdon.utils.ActionBudget;
 import dev.crystaladdon.utils.AimUtils;
 import dev.crystaladdon.utils.AnchorActions;
 import dev.crystaladdon.utils.AnchorSequence;
+import dev.crystaladdon.utils.KeyPriority;
 import dev.crystaladdon.utils.BlastShield;
 import dev.crystaladdon.utils.InventoryGuard;
 import dev.crystaladdon.utils.RevivedPlayers;
@@ -387,6 +388,10 @@ public class AutoAnchor extends CrystalModule {
             this.sightings.tick();
             if (Stealth.paused()) {
                AnchorActions.resetTurn(this);
+            } else if (KeyPriority.active()) {
+               // A key-driven module (the anchor macro, Sword Place, Double Tap) is at work: stay out of its way as the
+               // other auras do. Racing the macro, each set off the other's still-drawn anchor a second time.
+               AnchorActions.resetTurn(this);
             } else {
                this.budget.update((Double)this.speed.get(), 1);
                if ((Boolean)this.netherGuard.get() && this.mc.field_1687.method_27983() == class_1937.field_25180) {
@@ -630,7 +635,7 @@ public class AutoAnchor extends CrystalModule {
             class_2338 looking = hit.method_17777();
             class_1750 context = new class_1750(this.mc.field_1724, class_1268.field_5808, new class_1799(class_1802.field_23141), hit);
             class_2338 spot = AnchorActions.charges(looking) >= 0 ? looking : context.method_8037();
-            if (this.sequence.awaitingBlast(spot, blastWindow)) {
+            if (this.sequence.awaitingBlast(spot, blastWindow) || AnchorActions.Blasts.inFlight(spot)) {
                return null;
             } else {
                return this.score(spot, required, selfHealth) != null && this.sightings.pickable(spot) && this.clickable(spot) ? spot : null;
@@ -645,7 +650,9 @@ public class AutoAnchor extends CrystalModule {
             for (int y = -radius; y <= radius; y++) {
                for (int z = -radius; z <= radius; z++) {
                   class_2338 pos = origin.method_10069(x, y, z);
-                  if (!this.sequence.awaitingBlast(pos, blastWindow)) {
+                  // Not an anchor whose blast is still in flight, ours or anyone else's (the anchor macro's, your own
+                  // right-click): it stays drawn charged until the server's update arrives.
+                  if (!this.sequence.awaitingBlast(pos, blastWindow) && !AnchorActions.Blasts.inFlight(pos)) {
                      Double value = this.score(pos, required, selfHealth);
                      if (value != null && this.sightings.pickable(pos)) {
                         double targetDistance = this.target != null

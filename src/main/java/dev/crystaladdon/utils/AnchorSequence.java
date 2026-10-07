@@ -181,6 +181,11 @@ public final class AnchorSequence {
             if (!this.sent) {
                if (!this.actions.hasGlowstone()) {
                   return this.fail("no glowstone in the hotbar");
+               } else if (this.actions.blastInFlight(this.pos)) {
+                  // A top-up (glowstone in the offhand) on an anchor someone else already set off would put the
+                  // glowstone into the cell its blast has emptied on the server. The sequence ends once the anchor
+                  // is gone.
+                  return AnchorSequence.Step.Waiting;
                } else {
                   this.actions.charge(this.pos, this.onSend(options, () -> {
                      this.sent = true;
@@ -217,6 +222,10 @@ public final class AnchorSequence {
             return this.step(options, timeout, phases, predict);
          } else if (this.actions.detonationSlot() < 0) {
             return this.fail("no usable item to click with");
+         } else if (this.actions.blastInFlight(this.pos)) {
+            // Someone else's detonation (the anchor macro's, your own right-click) is already on its way: a second one
+            // would land on an anchor the server has already removed. Done once the anchor is gone (charges < 0 above).
+            return AnchorSequence.Step.Waiting;
          } else {
             class_2338 at = this.pos;
             this.actions.detonate(this.pos, charges, this.onSend(options, () -> {
@@ -361,6 +370,10 @@ public final class AnchorSequence {
       default boolean slotChanging() {
          return false;
       }
+
+      default boolean blastInFlight(class_2338 pos) {
+         return false;
+      }
    }
 
    private static final class ClientActions implements AnchorSequence.Actions {
@@ -400,6 +413,11 @@ public final class AnchorSequence {
       @Override
       public boolean slotChanging() {
          return ClickGate.slotChangedThisTick();
+      }
+
+      @Override
+      public boolean blastInFlight(class_2338 pos) {
+         return AnchorActions.Blasts.inFlight(pos);
       }
 
       @Override
