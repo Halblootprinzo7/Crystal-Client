@@ -49,38 +49,70 @@ public final class LegitPlace {
    private LegitPlace() {
    }
 
+   // Which looks a caller is willing to send: the yaw of the look, and the point its ray really hits. The searches
+   // below skip a look that fails it and go on to the next cheapest one, so a reachable point in front wins over a
+   // cheaper one behind you instead of the whole target being dropped - or turned to - for it.
+   @FunctionalInterface
+   public interface LookFilter {
+      boolean allows(double yaw, class_243 hit);
+   }
+
+   public static final LegitPlace.LookFilter ANY_LOOK = (yaw, hit) -> true;
+
    public static LegitPlace.Result forCrystal(class_2338 base, double reach) {
-      return clickOn(base, reach);
+      return clickOn(base, reach, ANY_LOOK);
+   }
+
+   public static LegitPlace.Result forCrystal(class_2338 base, double reach, LegitPlace.LookFilter look) {
+      return clickOn(base, reach, look);
    }
 
    public static LegitPlace.Result forExistingBlock(class_2338 pos, double reach) {
-      return clickOn(pos, reach);
+      return clickOn(pos, reach, ANY_LOOK);
+   }
+
+   public static LegitPlace.Result forExistingBlock(class_2338 pos, double reach, LegitPlace.LookFilter look) {
+      return clickOn(pos, reach, look);
    }
 
    public static LegitPlace.Result forExistingBlock(class_2338 pos, double reach, class_2338 obstacle) {
+      return forExistingBlock(pos, reach, obstacle, ANY_LOOK);
+   }
+
+   public static LegitPlace.Result forExistingBlock(class_2338 pos, double reach, class_2338 obstacle, LegitPlace.LookFilter look) {
       if (obstacle == null) {
-         return clickOn(pos, reach);
+         return clickOn(pos, reach, look);
       } else if (mc.field_1724 == null || mc.field_1687 == null) {
          return null;
       } else if (mc.field_1687.method_8320(pos).method_26215()) {
          return null;
       } else {
          Predicate<class_3965> onBlock = hit -> hit.method_17777().equals(pos) && !passesThrough(hit.method_17784(), obstacle);
-         LegitPlace.Result result = best(facePoints(pos, null, false, reach), reach, onBlock);
-         return result != null ? result : best(facePoints(pos, null, true, reach), reach, onBlock);
+         LegitPlace.Result result = best(facePoints(pos, null, false, reach), reach, onBlock, look);
+         return result != null ? result : best(facePoints(pos, null, true, reach), reach, onBlock, look);
       }
    }
 
    public static boolean stillClickable(class_2338 pos, double reach, class_2338 obstacle) {
+      return stillClickable(pos, reach, obstacle, ANY_LOOK);
+   }
+
+   // As above, counting only faces a look the filter allows reaches: a caller whose click on pos only goes along such
+   // looks (the anchor macro's Stealth.allowsLook) asks the same of a block that might hide it.
+   public static boolean stillClickable(class_2338 pos, double reach, class_2338 obstacle, LegitPlace.LookFilter look) {
       if (mc.field_1724 != null && mc.field_1687 != null) {
          class_2680 state = mc.field_1687.method_8320(pos);
          if (!state.method_26215() && !state.method_45474()) {
-            return forExistingBlock(pos, reach, obstacle) != null;
+            return forExistingBlock(pos, reach, obstacle, look) != null;
          } else {
             class_243 eyes = mc.field_1724.method_33571();
             return anyClearPoint(new class_238(pos), eyes, reach, obstacle, point -> {
-               class_3965 hit = mc.field_1687.method_17742(new class_3959(eyes, point, class_3960.field_17559, class_242.field_1348, mc.field_1724));
-               return hit == null || hit.method_17783() == class_240.field_1333 || hit.method_17777().equals(pos);
+               if (!look.allows(yawTowards(point), point)) {
+                  return false;
+               } else {
+                  class_3965 hit = mc.field_1687.method_17742(new class_3959(eyes, point, class_3960.field_17559, class_242.field_1348, mc.field_1724));
+                  return hit == null || hit.method_17783() == class_240.field_1333 || hit.method_17777().equals(pos);
+               }
             });
          }
       } else {
@@ -165,11 +197,15 @@ public final class LegitPlace {
    }
 
    public static LegitPlace.Result forBlock(class_2338 pos, double reach, class_2338 exclude, boolean excludeIsSolid) {
+      return forBlock(pos, reach, exclude, excludeIsSolid, ANY_LOOK);
+   }
+
+   public static LegitPlace.Result forBlock(class_2338 pos, double reach, class_2338 exclude, boolean excludeIsSolid, LegitPlace.LookFilter look) {
       if (mc.field_1724 != null && mc.field_1687 != null) {
          Predicate<class_3965> placesHere = hit -> placesAt(hit, pos, exclude)
             && (!excludeIsSolid || exclude == null || !passesThrough(hit.method_17784(), exclude));
-         LegitPlace.Result result = best(placementPoints(pos, exclude, false, reach), reach, placesHere);
-         return result != null ? result : best(placementPoints(pos, exclude, true, reach), reach, placesHere);
+         LegitPlace.Result result = best(placementPoints(pos, exclude, false, reach), reach, placesHere, look);
+         return result != null ? result : best(placementPoints(pos, exclude, true, reach), reach, placesHere, look);
       } else {
          return null;
       }
@@ -203,6 +239,10 @@ public final class LegitPlace {
    }
 
    public static LegitPlace.EntityResult forEntity(class_238 box, double reach) {
+      return forEntity(box, reach, ANY_LOOK);
+   }
+
+   public static LegitPlace.EntityResult forEntity(class_238 box, double reach, LegitPlace.LookFilter look) {
       if (mc.field_1724 != null && mc.field_1687 != null) {
          LegitPlace.EntityResult best = null;
          double bestCost = Double.MAX_VALUE;
@@ -210,8 +250,14 @@ public final class LegitPlace {
          for (class_243 aim : entityPoints(box)) {
             double yaw = yawTowards(aim);
             double pitch = Rotations.getPitch(aim);
+            // The aim point lies on the look's own ray, so a look the filter refuses is skipped before the ray is cast;
+            // the point the ray really hits is checked once more below.
+            if (!look.allows(yaw, aim)) {
+               continue;
+            }
+
             class_243 hit = confirmEntity(box, yaw, pitch, reach);
-            if (hit != null) {
+            if (hit != null && look.allows(yaw, hit)) {
                double cost = turnCost(yaw, pitch);
                if (cost < bestCost) {
                   bestCost = cost;
@@ -310,15 +356,15 @@ public final class LegitPlace {
       return points;
    }
 
-   private static LegitPlace.Result clickOn(class_2338 block, double reach) {
+   private static LegitPlace.Result clickOn(class_2338 block, double reach, LegitPlace.LookFilter look) {
       if (mc.field_1724 == null || mc.field_1687 == null) {
          return null;
       } else if (mc.field_1687.method_8320(block).method_26215()) {
          return null;
       } else {
          Predicate<class_3965> onBlock = hit -> hit.method_17777().equals(block);
-         LegitPlace.Result result = best(facePoints(block, null, false, reach), reach, onBlock);
-         return result != null ? result : best(facePoints(block, null, true, reach), reach, onBlock);
+         LegitPlace.Result result = best(facePoints(block, null, false, reach), reach, onBlock, look);
+         return result != null ? result : best(facePoints(block, null, true, reach), reach, onBlock, look);
       }
    }
 
@@ -402,6 +448,10 @@ public final class LegitPlace {
    }
 
    private static LegitPlace.Result best(List<class_243> points, double reach, Predicate<class_3965> accept) {
+      return best(points, reach, accept, ANY_LOOK);
+   }
+
+   private static LegitPlace.Result best(List<class_243> points, double reach, Predicate<class_3965> accept, LegitPlace.LookFilter look) {
       int count = points.size();
       double[] yaws = new double[count];
       double[] pitches = new double[count];
@@ -422,9 +472,12 @@ public final class LegitPlace {
 
       for (int var11 = 0; var11 < var15; var11++) {
          int i = var14[var11];
-         LegitPlace.Result candidate = cast(yaws[i], pitches[i], reach, accept);
-         if (candidate != null) {
-            return candidate;
+         // The aim point is on the look's own ray: a look the filter refuses is skipped without casting it.
+         if (look.allows(yaws[i], points.get(i))) {
+            LegitPlace.Result candidate = cast(yaws[i], pitches[i], reach, accept);
+            if (candidate != null && look.allows(candidate.yaw(), candidate.hitVec())) {
+               return candidate;
+            }
          }
       }
 

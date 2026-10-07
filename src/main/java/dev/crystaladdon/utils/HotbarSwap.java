@@ -158,7 +158,9 @@ public final class HotbarSwap {
             int selected = mc.field_1724.method_31548().method_67532();
             boolean through = pendingFrom >= 0 && pendingFrom == laterExpected && selected == pendingTo;
             if (lateTicks <= laterGiveUp && (selected == laterExpected || through)) {
-               if (lateTicks >= laterDue && ClickGate.canSwitchSlot()) {
+               // Burst 1: a switch back belongs to no module's burst, and after a click in this tick it would be a
+               // number key handled after a mouse button.
+               if (lateTicks >= laterDue && ClickGate.canSwitchSlot(1)) {
                   if (mc.field_1755 == null) {
                      if (!mc.field_1724.method_6115() || mc.field_1724.method_6058() != class_1268.field_5808) {
                         InvUtils.swap(laterSlot, false);
@@ -190,7 +192,7 @@ public final class HotbarSwap {
          } else if (mc.field_1724.method_31548().method_67532() != pendingTo || mc.field_1724.method_29504()) {
             pendingFrom = -1;
             pendingTo = -1;
-         } else if (ClickGate.canSwitchSlot() && mc.field_1755 == null) {
+         } else if (ClickGate.canSwitchSlot(1) && mc.field_1755 == null) {
             // Hand the slot back at once when the player is about to click themselves. Vanilla's use tries the main
             // hand first, so a right-click meant for the off-hand crystals would otherwise place the borrowed item
             // (Sword Place's obsidian) a second time. The click follows the switch in the same tick, as a number key

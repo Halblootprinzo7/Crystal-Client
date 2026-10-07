@@ -46,17 +46,43 @@ public final class ClickGate {
    }
 
    public static boolean canUse() {
-      return usesThisTick() < burst && !slotChangedThisTick() && !inventoryRecently();
+      return canUse(burst);
+   }
+
+   // As canUse, for a clicker with its own allowance: the player's own presses pass 1, so the burst a module raised
+   // for its speed above 20 never lets one of yours follow its clicks in the same tick.
+   public static boolean canUse(int burstFor) {
+      return usesThisTick() < burstFor && !slotChangedThisTick(burstFor) && !inventoryRecently();
    }
 
    public static boolean canAttack() {
-      return attacksThisTick() < burst && (useTick != tick || burst > 1) && !slotChangedThisTick() && !inventoryRecently();
+      return canAttack(burst);
+   }
+
+   // Vanilla handles every attack press before the use presses, so with one click of each a tick an attack never
+   // follows a use. See canUse(int) for burstFor.
+   public static boolean canAttack(int burstFor) {
+      return attacksThisTick() < burstFor && (useTick != tick || burstFor > 1) && !slotChangedThisTick(burstFor) && !inventoryRecently();
    }
 
    // Up to this many clicks of each kind in the current tick (1 to 3). Only ever raises the limit; it drops back to 1
    // when the next tick starts.
    public static void allowBurst(int clicks) {
       burst = Math.max(burst, Math.max(1, Math.min(3, clicks)));
+   }
+
+   // allowBurst for one actor's own clicks only: returns the burst as it was, for restoreBurst to put back once that
+   // actor's clicks of this pass are out (or did not go out). Raised for the rest of the tick, a module's allowance for
+   // its speed above 20 would also let every other actor of the tick - an offhand swap, a refill, the player's own
+   // presses - click or switch after it, in an order vanilla never sends.
+   public static int raiseBurst(int clicks) {
+      int before = burst;
+      allowBurst(clicks);
+      return before;
+   }
+
+   public static void restoreBurst(int before) {
+      burst = Math.max(1, before);
    }
 
    public static int burst() {
@@ -110,11 +136,18 @@ public final class ClickGate {
    }
 
    public static boolean canSwitchSlot() {
+      return canSwitchSlot(burst);
+   }
+
+   // See canUse(int) for burstFor: a slot change of no module's burst - a silent loan handed back - passes 1.
+   public static boolean canSwitchSlot(int burstFor) {
       if (inventoryRecently()) {
          return false;
       } else {
-         // In a burst a switch may follow a click in the same tick: place an anchor, take the glowstone, charge it.
-         return burst > 1 ? slotChangesThisTick() <= burst : clickTick != tick && slotTick != tick;
+         // In a burst a switch may follow a click in the same tick: place an anchor, take the glowstone, charge it. One
+         // switch for each click of the burst, not one more: a switch after the burst's last click is vanilla's number
+         // key coming after a mouse button within one tick, which it never handles in that order.
+         return burstFor > 1 ? slotChangesThisTick() < burstFor : clickTick != tick && slotTick != tick;
       }
    }
 
@@ -126,7 +159,11 @@ public final class ClickGate {
    // buttons in the same tick, so a switch and a click in one tick is something a player can do; Stealth's
    // same-tick-switch (on by default) allows it, otherwise the click waits a tick after the switch.
    public static boolean slotChangedThisTick() {
-      return slotTick == tick && burst <= 1 && !Stealth.sameTickSwitch();
+      return slotChangedThisTick(burst);
+   }
+
+   private static boolean slotChangedThisTick(int burstFor) {
+      return slotTick == tick && burstFor <= 1 && !Stealth.sameTickSwitch();
    }
 
    // A slot change went out this tick, whatever same-tick-switch and the burst say.

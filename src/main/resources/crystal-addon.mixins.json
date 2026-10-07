@@ -10,7 +10,9 @@
     "BlockItemInvoker",
     "MinecraftClientAccessor",
     "KeyboardInputMixin",
-    "OwnClickMixin"
+    "OwnClickMixin",
+    "ClientWorldAccessor",
+    "PendingUpdateManagerAccessor"
   ],
   "injectors": {
     "defaultRequire": 1

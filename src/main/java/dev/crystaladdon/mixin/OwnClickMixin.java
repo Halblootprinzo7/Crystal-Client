@@ -1,15 +1,11 @@
 package dev.crystaladdon.mixin;
 
-import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
-import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
 import dev.crystaladdon.modules.AutoCrystal;
 import dev.crystaladdon.utils.ClickGate;
 import dev.crystaladdon.utils.HotbarSwap;
 import dev.crystaladdon.utils.TurnProgress;
 import java.util.Arrays;
 import meteordevelopment.meteorclient.mixin.KeyBindingAccessor;
-import net.minecraft.class_2338;
-import net.minecraft.class_2350;
 import net.minecraft.class_304;
 import net.minecraft.class_310;
 import net.minecraft.class_315;
@@ -51,12 +47,14 @@ public abstract class OwnClickMixin {
       KeyBindingAccessor use = (KeyBindingAccessor)this.field_1690.field_1904;
       this.crystal$heldAttacks = 0;
       this.crystal$heldUses = 0;
-      if (mismatched || lent || !ClickGate.canAttack()) {
+      // Your own presses are judged with a burst of 1: a module's allowance for its speed above 20 is not yours, and
+      // with it a press of yours could follow a click in the same tick in an order vanilla never sends.
+      if (mismatched || lent || !ClickGate.canAttack(1)) {
          this.crystal$heldAttacks = attack.meteor$getTimesPressed();
          attack.meteor$setTimesPressed(0);
       }
 
-      if (mismatched || lent || !ClickGate.canUse()) {
+      if (mismatched || lent || !ClickGate.canUse(1)) {
          this.crystal$heldUses = use.meteor$getTimesPressed();
          use.meteor$setTimesPressed(0);
       }
@@ -115,7 +113,7 @@ public abstract class OwnClickMixin {
       cancellable = true
    )
    private void crystal$waitForLookAttack(CallbackInfoReturnable<Boolean> cir) {
-      if (TurnProgress.SHARED.ownClickMismatched() || HotbarSwap.lentThisTick() || !ClickGate.canAttack()) {
+      if (TurnProgress.SHARED.ownClickMismatched() || HotbarSwap.lentThisTick() || !ClickGate.canAttack(1)) {
          cir.setReturnValue(false);
       }
    }
@@ -126,7 +124,7 @@ public abstract class OwnClickMixin {
       cancellable = true
    )
    private void crystal$waitForLookUse(CallbackInfo ci) {
-      if (TurnProgress.SHARED.ownClickMismatched() || HotbarSwap.lentThisTick() || !ClickGate.canUse()) {
+      if (TurnProgress.SHARED.ownClickMismatched() || HotbarSwap.lentThisTick() || !ClickGate.canUse(1)) {
          ci.cancel();
       }
    }
@@ -140,15 +138,21 @@ public abstract class OwnClickMixin {
       return breaking && !TurnProgress.SHARED.ownClickMismatched();
    }
 
-   // AutoCrystal's no-mining-bases: a left click on obsidian or bedrock with a weapon or crystals in hand only swings.
+   // AutoCrystal's no-mining-bases: a left click on obsidian or bedrock with a weapon or crystals in hand does nothing.
    // Mining it would get nowhere and keep every right click back - the aura's next crystal included - for as long as
-   // the button is down. Only the call that starts mining is left out; the swing and any entity hit stay vanilla's.
-   @WrapOperation(
+   // the button is down. The whole press is dropped, not only the call that starts mining: vanilla sends the dig start
+   // for every block hit before it swings, so a swing at a block in reach with no dig before it is something no client
+   // sends. The press is already used up by handleInputEvents, so the server sees a tick without a click. sparesBase
+   // only matches a block under the crosshair, so entity hits and misses stay vanilla's.
+   @Inject(
       method = {"method_1536"},
-      at = {@At(value = "INVOKE", target = "Lnet/minecraft/class_636;method_2910(Lnet/minecraft/class_2338;Lnet/minecraft/class_2350;)Z")}
+      at = {@At("HEAD")},
+      cancellable = true
    )
-   private boolean crystal$spareBaseOnPress(class_636 manager, class_2338 pos, class_2350 side, Operation<Boolean> original) {
-      return AutoCrystal.sparesBase((class_310)(Object)this) ? false : original.call(manager, pos, side);
+   private void crystal$spareBaseOnPress(CallbackInfoReturnable<Boolean> cir) {
+      if (AutoCrystal.sparesBase((class_310)(Object)this)) {
+         cir.setReturnValue(false);
+      }
    }
 
    // The same while the button is held: a press ClickGate put off, or a held button moved onto the base, would start

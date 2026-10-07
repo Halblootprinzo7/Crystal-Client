@@ -1,5 +1,7 @@
 package dev.crystaladdon.utils;
 
+import dev.crystaladdon.mixin.ClientWorldAccessor;
+import dev.crystaladdon.mixin.PendingUpdateManagerAccessor;
 import dev.crystaladdon.modules.Stealth;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -41,6 +43,7 @@ import net.minecraft.class_310;
 import net.minecraft.class_3489;
 import net.minecraft.class_3965;
 import net.minecraft.class_638;
+import net.minecraft.class_7202;
 import net.minecraft.class_746;
 import net.minecraft.class_8162;
 
@@ -251,24 +254,43 @@ public final class AnchorActions {
       }
    }
 
+   // The click on the anchor at pos, along a look in view: the point it hits within Stealth's view-angle of the camera
+   // look, its yaw not turned round from the camera's (Stealth.allowsLook). The cell itself being in view says nothing
+   // about that - one corner of it in the cone was enough, while the cheapest face point sat 110 degrees off.
    public static class_3965 hitResultFor(class_2338 pos, boolean rotate) {
+      return hitResultFor(pos, rotate, Stealth::allowsLook);
+   }
+
+   // As above with the caller's own filter; LegitPlace.ANY_LOOK asks whether any face could be clicked at all.
+   public static class_3965 hitResultFor(class_2338 pos, boolean rotate, LegitPlace.LookFilter look) {
       double reach = VanillaLimits.blockRange();
       if (rotate) {
          // Within a burst the anchor was usually just placed along this tick's look, which runs through it: charging
          // and detonating along the same look lets them go out in the same tick instead of waiting for a new turn.
-         double[] look = turn.lookThisTick();
-         if (look != null) {
-            class_3965 same = LegitPlace.along(look[0], look[1], reach);
-            if (same != null && same.method_17777().equals(pos)) {
+         double[] lookNow = turn.lookThisTick();
+         if (lookNow != null) {
+            class_3965 same = LegitPlace.along(lookNow[0], lookNow[1], reach);
+            if (same != null && same.method_17777().equals(pos) && look.allows(lookNow[0], same.method_17784())) {
                return same;
             }
          }
 
-         LegitPlace.Result legit = LegitPlace.forExistingBlock(pos, reach);
+         LegitPlace.Result legit = LegitPlace.forExistingBlock(pos, reach, look);
          return legit == null ? null : legit.hit();
       } else {
          class_3965 hit = LegitPlace.along(LegitPlace.currentYaw(), LegitPlace.currentPitch(), reach);
-         return hit != null && hit.method_17777().equals(pos) ? hit : null;
+         return hit != null && hit.method_17777().equals(pos) && look.allows(LegitPlace.currentYaw(), hit.method_17784()) ? hit : null;
+      }
+   }
+
+   // Whether the client still shows a guess of its own at pos: a click of ours changed the block there and the server
+   // has not acknowledged that click yet. Until it has, a placement it refused still shows as placed.
+   public static boolean unconfirmed(class_2338 pos) {
+      if (mc.field_1687 == null) {
+         return false;
+      } else {
+         class_7202 pending = ((ClientWorldAccessor)mc.field_1687).crystal$getPendingUpdates();
+         return pending != null && ((PendingUpdateManagerAccessor)pending).crystal$getPending().containsKey(pos.method_10063());
       }
    }
 
@@ -517,28 +539,39 @@ public final class AnchorActions {
          pitch = LegitPlace.currentPitch();
       }
 
+      class_3965 click;
       if (destination != null) {
-         return LegitPlace.confirmPlacement(destination, item, yaw, pitch, VanillaLimits.blockRange());
+         click = LegitPlace.confirmPlacement(destination, item, yaw, pitch, VanillaLimits.blockRange());
       } else {
-         return charges(planned.method_17777()) < 0 ? null : LegitPlace.confirmCrystal(planned.method_17777(), yaw, pitch, VanillaLimits.blockRange());
+         click = charges(planned.method_17777()) < 0 ? null : LegitPlace.confirmCrystal(planned.method_17777(), yaw, pitch, VanillaLimits.blockRange());
       }
+
+      // The last word on the view, on the point this very look hits: a look planned ticks ago - or the one the server
+      // holds, with rotate off - may no longer be in front of you.
+      return click != null && Stealth.allowsLook(yaw, click.method_17784()) ? click : null;
    }
 
    public static class_3965 placeHit(class_2338 pos) {
       return placeHit(pos, true);
    }
 
+   // The click that puts an anchor at pos, along a look in view (see hitResultFor).
    public static class_3965 placeHit(class_2338 pos, boolean rotate) {
+      return placeHit(pos, rotate, Stealth::allowsLook);
+   }
+
+   public static class_3965 placeHit(class_2338 pos, boolean rotate, LegitPlace.LookFilter look) {
       if (mc.field_1687 != null && mc.field_1724 != null) {
          class_2680 state = mc.field_1687.method_8320(pos);
          double reach = VanillaLimits.blockRange();
          if (!state.method_26215() && state.method_45474() && !canReplaceAt(pos, class_1802.field_23141)) {
             return null;
          } else if (rotate) {
-            LegitPlace.Result legit = LegitPlace.forBlock(pos, reach);
+            LegitPlace.Result legit = LegitPlace.forBlock(pos, reach, null, false, look);
             return legit == null ? null : legit.hit();
          } else {
-            return LegitPlace.confirmPlacement(pos, class_1802.field_23141, LegitPlace.currentYaw(), LegitPlace.currentPitch(), reach);
+            class_3965 hit = LegitPlace.confirmPlacement(pos, class_1802.field_23141, LegitPlace.currentYaw(), LegitPlace.currentPitch(), reach);
+            return hit != null && look.allows(LegitPlace.currentYaw(), hit.method_17784()) ? hit : null;
          }
       } else {
          return null;

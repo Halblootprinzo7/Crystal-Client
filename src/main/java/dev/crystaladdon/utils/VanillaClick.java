@@ -43,11 +43,19 @@ public final class VanillaClick {
       if (mc.field_1724 == null || mc.field_1687 == null || mc.field_1761 == null) {
          return null;
       } else if (!mc.field_1761.method_2923() && !mc.field_1724.method_3144()) {
+         double yaw = LegitPlace.currentYaw();
+         double pitch = LegitPlace.currentPitch();
+         // The click goes along the look the server has; make sure that is the look this tick's movement packet carries.
+         // Nothing goes out when another clicker already sent a click this tick along a different look of its own.
+         if (!TurnProgress.SHARED.noteOwnClick(yaw, pitch)) {
+            return null;
+         }
+
          ((MinecraftClientAccessor)mc).crystal$setItemUseCooldown(4);
          float viewYaw = mc.field_1724.method_36454();
          float viewPitch = mc.field_1724.method_36455();
-         mc.field_1724.method_36456((float)LegitPlace.currentYaw());
-         mc.field_1724.method_36457((float)LegitPlace.currentPitch());
+         mc.field_1724.method_36456((float)yaw);
+         mc.field_1724.method_36457((float)pitch);
 
          class_1268 var4;
          ClickGate.clickStart();
