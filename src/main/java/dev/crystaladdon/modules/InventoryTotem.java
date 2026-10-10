@@ -16,6 +16,7 @@ import meteordevelopment.orbit.EventHandler;
 import net.minecraft.class_1041;
 import net.minecraft.class_1713;
 import net.minecraft.class_1735;
+import net.minecraft.class_1799;
 import net.minecraft.class_1802;
 import net.minecraft.class_465;
 import org.lwjgl.glfw.GLFW;
@@ -57,7 +58,7 @@ public class InventoryTotem extends CrystalModule {
          ((meteordevelopment.meteorclient.settings.BoolSetting.Builder)((meteordevelopment.meteorclient.settings.BoolSetting.Builder)((meteordevelopment.meteorclient.settings.BoolSetting.Builder)new meteordevelopment.meteorclient.settings.BoolSetting.Builder()
                      .name("move-cursor"))
                   .description(
-                     "Also glide the real pointer onto the totem before the swap. Only for the eye: the server gets the same click either way. Where the window system does not report the move (X11, Wayland) or you move the mouse yourself, the swap goes out without it."
+                     "Also glide the real pointer onto the totem before the swap. Only for the eye: the server gets the same click either way, but the glide takes at least 3 ticks plus one for the hover, so the swap comes that much later. Where the window system does not report the move (X11, Wayland) or you move the mouse yourself, the swap goes out without it."
                   ))
                .defaultValue(false))
             .build()
@@ -82,6 +83,10 @@ public class InventoryTotem extends CrystalModule {
    }
 
    public void onDeactivate() {
+      if (this.approach != null && this.mc.field_1755 == this.approach.screen) {
+         this.resync(this.approach);
+      }
+
       this.approach = null;
       this.warpUnreported = false;
       this.cooldown = 0;
@@ -115,6 +120,7 @@ public class InventoryTotem extends CrystalModule {
             }
          } else {
             this.approach = null;
+            this.cooldown = 0;
             this.failures = 0;
             this.failureScreen = null;
             this.clock.forget(NEED);
@@ -125,6 +131,9 @@ public class InventoryTotem extends CrystalModule {
    private boolean wanted(class_465<?> screen) {
       if (this.mc.field_1724.method_6079().method_31574(class_1802.field_8288)) {
          return false;
+      } else if (InventoryGuard.offhandInFlight()) {
+         // A swap-hands another module sent is not answered yet; the offhand shown here is the one before it.
+         return false;
       } else {
          return !TotemRules.healthAllows((Double)this.health.get(), EntityUtils.getTotalHealth(this.mc.field_1724))
             ? false
@@ -132,13 +141,15 @@ public class InventoryTotem extends CrystalModule {
       }
    }
 
+   // The held totem only as a last resort. Told apart by its stack: the creative screen's slot wrappers carry the
+   // handler's numbering, not the inventory index.
    private class_1735 findTotem(class_465<?> screen) {
-      int selected = this.mc.field_1724.method_31548().method_67532();
+      class_1799 held = this.mc.field_1724.method_31548().method_5438(this.mc.field_1724.method_31548().method_67532());
       class_1735 mainHand = null;
 
       for (class_1735 slot : screen.method_17577().field_7761) {
          if (this.isOwnTotem(slot) && slot.method_7682()) {
-            if (slot.method_34266() != selected) {
+            if (slot.method_7677() != held) {
                return slot;
             }
 
@@ -189,7 +200,12 @@ public class InventoryTotem extends CrystalModule {
 
    private void proceed(class_465<?> screen) {
       InventoryTotem.Approach a = this.approach;
-      if (screen == a.screen && this.wanted(screen) && this.isOwnTotem(a.slot) && a.slot.method_7682()) {
+      // The creative screen swaps its slot list on a tab change, so the slot must still be one of the screen's.
+      if (screen == a.screen
+         && this.wanted(screen)
+         && screen.method_17577().field_7761.contains(a.slot)
+         && this.isOwnTotem(a.slot)
+         && a.slot.method_7682()) {
          if (a.pointer && !a.answered) {
             if (!this.checkWarp(a)) {
                return;
@@ -209,6 +225,7 @@ public class InventoryTotem extends CrystalModule {
             this.finish(screen, a);
          }
       } else {
+         this.resync(a);
          this.approach = null;
          this.clock.forget(NEED);
       }
@@ -238,7 +255,6 @@ public class InventoryTotem extends CrystalModule {
                } else {
                   if (!a.reported) {
                      this.warpUnreported = true;
-                     GLFW.glfwSetCursorPos(this.mc.method_22683().method_4490(), a.startX, a.startY);
                      if ((Boolean)this.chatInfo.get()) {
                         this.info("The window system does not report pointer moves; swapping without the pointer from now on.", new Object[0]);
                      }
@@ -253,9 +269,18 @@ public class InventoryTotem extends CrystalModule {
    }
 
    private boolean dropPointer(InventoryTotem.Approach a) {
+      this.resync(a);
       a.pointer = false;
       a.answered = true;
       return true;
+   }
+
+   // A move still unanswered may have moved the pointer you see (X11 moves it but never reports it): put it back where
+   // Minecraft clicks.
+   private void resync(InventoryTotem.Approach a) {
+      if (a.pointer && !a.answered) {
+         GLFW.glfwSetCursorPos(this.mc.method_22683().method_4490(), this.mc.field_1729.method_1603(), this.mc.field_1729.method_1604());
+      }
    }
 
    private void warp(InventoryTotem.Approach a) {
